@@ -214,3 +214,15 @@ threadgroup size and fill, `inkling kpeak` / `kmode` the tensor units' ceiling a
 concentrated full attention is over its keys, `INK_KVQ=kbits,vbits inkling check` simulates a coarser cache; `INK_TIER_MIN=n` / `INK_TIER_HOT=n` make `--kv-disk` start at a smaller context / with tiny rings for tests. `INK_CHUNK=N` caps the prefill batch (default 4096 tokens). If the tensor ops' accumulator layout is not the one the register epilogues expect, the engine
 falls back to a slower tensor path (`INK_NO_HGEMM=1` forces it); `INK_NO_TENSOR=1` uses simdgroup matrices instead of the
 neural accelerators.
+
+## License
+
+Copyright (C) 2026 Eris
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public
+License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later
+version. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
+warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See [LICENSE](LICENSE) for the full text.
+
+The license covers this engine's source code only. The Inkling 2 Mini weights are not part of this repository and
+remain under their own terms.
