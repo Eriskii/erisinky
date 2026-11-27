@@ -2156,6 +2156,9 @@ pub struct Kv256kPool<'a> {
     pub cold: NvmeColdStore,
     pub swap: WaveSwapManager,
     pub moe_cfg: MoeRouteCfg,
+    /// Optional effective position cap for Inkling's log-scaled attention temperature `tau` (`0` = native `pos`).
+    /// Setting e.g. `9216` when `use_centroids == false` calibrates `tau` to the actual active softmax size!
+    pub tau_pos_cap: usize,
 }
 
 impl<'a> Kv256kPool<'a> {
@@ -2341,6 +2344,7 @@ impl<'a> Kv256kPool<'a> {
             cold,
             swap,
             moe_cfg: MoeRouteCfg::opt_6class_dyn4(true),
+            tau_pos_cap: 0,
         })
     }
 
@@ -3238,6 +3242,11 @@ impl<'a> Kv256kPool<'a> {
                 e.buf(&self.kv_sum, 0, 8);
                 e.buf(&self.aux, 0, 9);
                 let eff_sink = if dc_on { da.eff_sink } else { da.sink };
+                let eff_log_floor = if self.tau_pos_cap > 0 && max_pos + 1 > self.tau_pos_cap {
+                    self.eng.log_floor * ((max_pos + 1) as f32 / self.tau_pos_cap as f32)
+                } else {
+                    self.eng.log_floor
+                };
                 let kw = WhtKvPrepArgs {
                     b: b_len as u32, pool_cap: self.lru.hot_cap as u32, slot_idx: slot_idx as u32,
                     page_toks: pt as u32, kv_bits: self.cfg.kv_bits,
@@ -3247,7 +3256,7 @@ impl<'a> Kv256kPool<'a> {
                     q_off: da.q, k_off: da.k, v_off: da.v, r_off: da.rel,
                     kdyn_off: da.kdyn as i32, vdyn_off: da.vdyn as i32,
                     kconv_t_w: l.k_conv_t, vconv_t_w: l.v_conv_t, qclip_w: l.q_clip, relclip_w: l.rel_clip,
-                    log_alpha: self.eng.log_alpha, log_floor: self.eng.log_floor,
+                    log_alpha: self.eng.log_alpha, log_floor: eff_log_floor,
                     qp_off: da.qp, rp_off: da.rp, sink_off: da.sink, eff_sink_off: eff_sink,
                     use_dc_mean: dc_on as u32, pad0: 0, pad1: 0, pad2: 0,
                 };
@@ -4407,7 +4416,7 @@ fn clone_sum_page_slot(pool: &Kv256kPool, src_spid: u32, dst_spid: u32) {
 /// - Runs genuine 48-layer `Kv256kPool` GPU decode at the TRUE `pos = 1,049,344` (1M) and `pos = 10,486,528` (10M)
 ///   (scoring ALL 8,190 / 81,918 pages via `k_score_pages_wht2`, retrieving Top-K, and folding ALL remaining centroids with `+ln(128)`
 ///   under Inkling's true `tau = 1 + log_alpha * log(pos / log_floor)`).
-pub fn run_needle_1m_10m(eng: &Engine, tk: &Tokenizer, top_k_pages: usize, effort: f32) {
+pub fn run_needle_1m_10m(eng: &Engine, tk: &Tokenizer, top_k_pages: usize, effort: f32, subtest: &str) {
     let pt = 128usize;
     let top_k = top_k_pages.clamp(16, 128);
     let use_cot = effort > 0.0;
@@ -4415,7 +4424,7 @@ pub fn run_needle_1m_10m(eng: &Engine, tk: &Tokenizer, top_k_pages: usize, effor
 
     println!("==========================================================================================================");
     println!("  INKLING-2-MINI 1M & 10M TOKEN NEEDLE-IN-A-HAYSTACK STRESS TEST (Kv256k-Sparse: WHT-K3V2 + DC + WHT2-Sketch)");
-    println!("  Top-K = {top_k} pages ({} sharp far tok) | effort={eff_str} | greedy decode | ring-exact pos alignment", top_k * pt);
+    println!("  Top-K = {top_k} pages ({} sharp far tok) | subtest={subtest} | effort={eff_str} | greedy decode", top_k * pt);
     println!("==========================================================================================================");
 
     // 1. Gather real diverse source text for 32 unique 4K haystack chunks (131K unique tok = 1,024 unique pages) + 3 needle chunks + 1 tail chunk
@@ -4518,10 +4527,17 @@ pub fn run_needle_1m_10m(eng: &Engine, tk: &Tokenizer, top_k_pages: usize, effor
     //   1M        = 455 * 2304 + 1024 =  1,049,344 tokens ( 8,198 pages, Top-K=64 -> 0.78% active)
     //  10M (K=64) = 4551 * 2304 + 1024 = 10,486,528 tokens (81,926 pages, Top-K=64 -> 0.078% active)
     //  10M (K=128)= 4551 * 2304 + 1024 = 10,486,528 tokens (81,926 pages, Top-K=128 -> 0.156% active)
-    let scales: [(&str, usize); 2] = [
+    let scales_all: [(&str, usize); 2] = [
         ("1M", 455 * 2304 + EXT),
         ("10M", 4551 * 2304 + EXT),
     ];
+    let scales: Vec<(&str, usize)> = if subtest == "10m" {
+        vec![scales_all[1]]
+    } else if subtest == "1m" {
+        vec![scales_all[0]]
+    } else {
+        scales_all.to_vec()
+    };
 
     for &(scale_name, target_pos) in &scales {
         let total_pages = target_pos / pt;
@@ -4639,10 +4655,25 @@ pub fn run_needle_1m_10m(eng: &Engine, tk: &Tokenizer, top_k_pages: usize, effor
         let fp_after = proc_phys_footprint_bytes() as f64 / (1u64 << 30) as f64;
         println!("  Setup: prefill+compress 35 real chunks (143K tok) = {prep_s:.1} s | populate {n_far_pages} distinct DRAM index cards = {pop_s:.2} s | phys_footprint = {fp_after:.2} GiB");
 
-        // Test both: (1) full background centroids ON (true 1M/10M softmax) and (2) pure Top-K retrieval (centroids OFF)
-        for &use_cent in &[true, false] {
+        // Regimes to test: `(tag, use_centroids, tau_pos_cap, regime_cot)`
+        let active_softmax_tok = EXT + top_k * pt; // 1024 + 64*128 = 9216
+        let regimes: Vec<(&str, bool, usize, bool)> = if subtest == "10m" {
+            vec![
+                ("cent=OFF tau=9K  direct", false, active_softmax_tok, false),
+                ("cent=ON  tau=256K direct", true, 262_144, false),
+                ("cent=OFF tau=9K  CoT0.1", false, active_softmax_tok, true),
+                ("cent=ON  tau=256K CoT0.1", true, 262_144, true),
+            ]
+        } else {
+            vec![
+                ("cent=ON  tau=nat", true, 0, use_cot),
+                ("cent=OFF tau=9K ", false, active_softmax_tok, use_cot),
+            ]
+        };
+
+        for &(cent_tag, use_cent, tau_cap, regime_cot) in &regimes {
             pool.cfg.use_centroids = use_cent;
-            let cent_tag = if use_cent { "cent=ON " } else { "cent=OFF" };
+            pool.tau_pos_cap = tau_cap;
             let scale_top_k = top_k;
             pool.cfg.top_k_pages = scale_top_k;
             println!("  --- Testing {scale_name} @ Top-K={scale_top_k} / {n_far_pages} ({:.4}% active | {cent_tag}) ---",
@@ -4722,8 +4753,12 @@ pub fn run_needle_1m_10m(eng: &Engine, tk: &Tokenizer, top_k_pages: usize, effor
             qsess.page_hashes = vec![None; qsess.logical_pages.len()];
             qsess.pos = target_pos;
 
-            let q_str = if use_cot {
-                format!("\nQuestion: {}<|end_message|>", nd.question)
+            let q_str = if regime_cot {
+                format!(
+                    "<|end_message|><|message_system|><|content_text|>Thinking effort level: 0.1<|end_message|>\
+                     <|message_user|><|content_text|>Question: {}<|end_message|>",
+                    nd.question
+                )
             } else {
                 format!("\nQuestion: {}<|end_message|><|message_model|><|content_text|>", nd.question)
             };
@@ -4769,7 +4804,7 @@ pub fn run_needle_1m_10m(eng: &Engine, tk: &Tokenizer, top_k_pages: usize, effor
             }
             let _q_ms = t_q.elapsed().as_secs_f64() * 1e3;
 
-            let max_gen = if use_cot { 256usize } else { 48usize };
+            let max_gen = if regime_cot { 280usize } else { 48usize };
             let mut gen_toks: Vec<u32> = Vec::with_capacity(max_gen);
             let mut cur_tok = pred;
             let mut answer_bytes: Vec<u8> = Vec::new();

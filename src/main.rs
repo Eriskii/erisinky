@@ -714,7 +714,7 @@ fn main() {
             let eng = Engine::load(&o.model, 8192);
             let tk = Tokenizer::load(&eng.g);
             let eff: f32 = effort_str(&o.effort).parse().unwrap_or(0.0);
-            kv256k::run_needle_1m_10m(&eng, &tk, o.topk_pages, eff);
+            kv256k::run_needle_1m_10m(&eng, &tk, o.topk_pages, eff, &o.subtest);
         }
         "kv-share-probe" => {
             let eng = Engine::load(&o.model, o.ctx);
