@@ -2702,6 +2702,365 @@ impl<'a> Kv256kPool<'a> {
         Ok(())
     }
 
+    /// Release all pool resources held by `sess` (CS slot, SWA pages, summary pages, and
+    /// hot/cold logical full pages) so the session can be reused cleanly (e.g. `/clear`).
+    pub fn reset_session(&mut self, sess: &mut Kv256kSession) {
+        if let Some(cs) = sess.cs_slot.take() {
+            self.free_cs(cs);
+        }
+        for p in sess.swa_pages.drain(..) {
+            self.free_swa_page(p);
+        }
+        for p in sess.swa_outer_pages.drain(..) {
+            self.free_swa_outer_page(p);
+        }
+        for sp in sess.sum_pages.drain(..) {
+            if sp != u32::MAX {
+                self.free_sum_page(sp);
+            }
+        }
+        for h_opt in sess.page_hashes.drain(..) {
+            if let Some(h) = h_opt {
+                let _ = self.radix.release(h);
+            }
+        }
+        for lid in sess.logical_pages.drain(..) {
+            self.lru.free_logical(lid, &mut self.cold);
+        }
+        sess.pos = 0;
+        sess.last_prefix_hash = 0;
+        sess.swapped_out = false;
+        sess.next_tok = 0;
+        sess.generated.clear();
+    }
+
+    /// Append `n_toks` newly unpacked or prefilled FP16 tokens from `self.eng` into `sess`
+    /// starting at `sess.pos` (supports arbitrary non-page-aligned `sess.pos`!).
+    /// - Full KV is read from `eng.kv_full[src_pos0 .. src_pos0 + n_toks)` and compressed into
+    ///   `WHT-K3V2`/`KV4` pages with `self.k_dc_mean` subtraction + `WHT-2bit-sketch` summaries.
+    /// - If `swa_nkeys > 0`, Tiered-SWA (or legacy SWA) receives `[swa_src_first_pos .. swa_src_first_pos + swa_nkeys)`
+    ///   from `eng.kv_swa` (ring-indexed `p % swa_cap`), safely graduating any prior inner-ring
+    ///   blocks into `swa_outer_comp` first so zero tokens are lost across arbitrary boundaries!
+    /// - If `load_cs` is true, `eng.cs` is broadcast into `sess.cs_slot` at ring offset `end_pos % 3`.
+    pub fn append_fp16_kv_from_engine(
+        &mut self,
+        sess: &mut Kv256kSession,
+        src_pos0: usize,
+        n_toks: usize,
+        swa_src_first_pos: usize,
+        swa_nkeys: usize,
+        load_cs: bool,
+    ) -> Result<(), String> {
+        if n_toks == 0 {
+            return Ok(());
+        }
+        let start_pos = sess.pos;
+        let end_pos = start_pos + n_toks;
+        if end_pos >= self.cfg.max_ctx {
+            return Err(format!(
+                "Kv256kPool context full ({end_pos} >= max_ctx {})",
+                self.cfg.max_ctx
+            ));
+        }
+        let pt = self.cfg.page_toks;
+
+        // 1. Broadcast FP16 CS slot from Engine's fp32 CS rotated for `end_pos`
+        if load_cs || sess.cs_slot.is_none() {
+            let cs_slot = match sess.cs_slot {
+                Some(c) => c,
+                None => {
+                    let c = self.alloc_cs()?;
+                    sess.cs_slot = Some(c);
+                    c
+                }
+            };
+            if load_cs {
+                unsafe { *(self.meta[1].contents().as_ptr() as *mut u32) = cs_slot; }
+                let cb = self.eng.gpu.cmd();
+                let e = Enc::new(&cb);
+                e.pso(&self.eng.gpu.pso("k_broadcast_cs_hcs"));
+                e.buf(&self.eng.cs, 0, 4);
+                e.buf(&self.meta[1], 0, 7);
+                e.buf(&self.cs_pool_hcs, 0, 8);
+                let ca = CopyCsArgs {
+                    dst_off: 0,
+                    n: 1,
+                    max_batch: self.cfg.max_active_batch as u32,
+                    prefix_len: end_pos as u32,
+                };
+                e.bytes(&ca, 5);
+                e.dispatch((NCH.div_ceil(256), 1, N_SLOT), 256);
+                e.end();
+                cb.commit();
+                cb.waitUntilCompleted();
+            } else {
+                self.zero_cs_slots(&[cs_slot]);
+            }
+        }
+
+        // 2. Append SWA window `[swa_src_first_pos .. swa_src_first_pos + swa_nkeys)` into Tiered/Legacy SWA
+        if swa_nkeys > 0 {
+            let swa_end = swa_src_first_pos + swa_nkeys;
+            if self.cfg.use_tiered_swa {
+                while sess.swa_pages.len() < SWA_INNER_BLKS {
+                    let p = self.alloc_swa_page()?;
+                    sess.swa_pages.push(p);
+                }
+                while sess.swa_outer_pages.len() < SWA_OUTER_BLKS {
+                    let p = self.alloc_swa_outer_page()?;
+                    sess.swa_outer_pages.push(p);
+                }
+                let new_last_blk = (swa_end - 1) / KV_BLK;
+                let new_inner_start = new_last_blk.saturating_sub(SWA_INNER_BLKS - 1);
+                let new_inner_p0 = new_inner_start * KV_BLK;
+
+                let run_grad = |pool: &Kv256kPool, jobs: &[(u32, u32)]| {
+                    if jobs.is_empty() { return; }
+                    let mp = pool.meta[1].contents().as_ptr() as *mut u32;
+                    let src_off = 64u32;
+                    let dst_off = 96u32;
+                    unsafe {
+                        for (j, &(sp, dp)) in jobs.iter().enumerate() {
+                            *mp.add(src_off as usize + j) = sp;
+                            *mp.add(dst_off as usize + j) = dp;
+                        }
+                    }
+                    let cb = pool.eng.gpu.cmd();
+                    let e = Enc::new(&cb);
+                    e.pso(&pool.eng.gpu.pso("k_swa_compress_outer"));
+                    e.buf(&pool.swa_inner, 0, 3);
+                    e.buf(&pool.swa_inner_sc, 0, 6);
+                    e.buf(&pool.meta[1], 0, 7);
+                    e.buf(&pool.swa_outer_comp, 0, 8);
+                    e.buf(&pool.swa_outer_sc, 0, 9);
+                    let ca = SwaCompressArgs {
+                        n_jobs: jobs.len() as u32,
+                        inner_cap: pool.swa_inner_cap as u32,
+                        outer_cap: pool.swa_outer_cap as u32,
+                        slot_start: 0,
+                        inner_fp16: pool.cfg.swa_inner_fp16 as u32,
+                        src_pid_off: src_off,
+                        dst_pid_off: dst_off,
+                        pad0: 0,
+                    };
+                    e.bytes(&ca, 5);
+                    e.dispatch((jobs.len() * KV_BLK, NKV, N_SWA), 128);
+                    e.end();
+                    cb.commit();
+                    cb.waitUntilCompleted();
+                };
+
+                let run_load = |pool: &Kv256kPool, sess: &Kv256kSession, first_p: usize, count: usize, inner_p0: usize| {
+                    if count == 0 { return; }
+                    let mp = pool.meta[1].contents().as_ptr() as *mut u32;
+                    let in_off = 0u32;
+                    let out_off = 16u32;
+                    unsafe {
+                        for (k, &p) in sess.swa_pages.iter().enumerate() { *mp.add(in_off as usize + k) = p; }
+                        for (k, &p) in sess.swa_outer_pages.iter().enumerate() { *mp.add(out_off as usize + k) = p; }
+                    }
+                    let cb = pool.eng.gpu.cmd();
+                    let e = Enc::new(&cb);
+                    e.pso(&pool.eng.gpu.pso("k_swa_load_from_engine"));
+                    e.buf(&pool.eng.kv_swa.borrow(), 0, 1);
+                    e.buf(&pool.swa_inner, 0, 3);
+                    e.buf(&pool.swa_inner_sc, 0, 6);
+                    e.buf(&pool.meta[1], 0, 7);
+                    e.buf(&pool.swa_outer_comp, 0, 8);
+                    e.buf(&pool.swa_outer_sc, 0, 9);
+                    let la = SwaLoadEngineArgs {
+                        src_cap: pool.eng.swa_cap.get() as u32,
+                        first_pos: first_p as u32,
+                        nkeys: count as u32,
+                        inner_p0: inner_p0 as u32,
+                        inner_cap: pool.swa_inner_cap as u32,
+                        outer_cap: pool.swa_outer_cap as u32,
+                        inner_fp16: pool.cfg.swa_inner_fp16 as u32,
+                        slot_start: 0,
+                        inner_pt_off: in_off,
+                        outer_pt_off: out_off,
+                        pad0: 0, pad1: 0,
+                    };
+                    e.bytes(&la, 5);
+                    e.dispatch((count, NKV, N_SWA), 128);
+                    e.end();
+                    cb.commit();
+                    cb.waitUntilCompleted();
+                };
+
+                let mut rem_first = swa_src_first_pos;
+                if start_pos > 0 && swa_src_first_pos <= start_pos {
+                    let old_last_blk = (start_pos - 1) / KV_BLK;
+                    let old_inner_start = old_last_blk.saturating_sub(SWA_INNER_BLKS - 1);
+                    let aligned_end = (start_pos % KV_BLK) == 0;
+                    // Step 1: Graduate completed old inner blocks that are leaving the inner ring
+                    let grad_end_blk = if aligned_end {
+                        new_inner_start.min(old_last_blk + 1)
+                    } else {
+                        new_inner_start.min(old_last_blk)
+                    };
+                    if grad_end_blk > old_inner_start {
+                        let jobs: Vec<(u32, u32)> = (old_inner_start..grad_end_blk)
+                            .map(|blk| (sess.swa_pages[blk % SWA_INNER_BLKS], sess.swa_outer_pages[blk % SWA_OUTER_BLKS]))
+                            .collect();
+                        run_grad(self, &jobs);
+                    }
+                    // Step 2: Complete & graduate a straddling partial boundary block if it leaves inner
+                    if !aligned_end && old_last_blk < new_inner_start {
+                        let blk_end = ((old_last_blk + 1) * KV_BLK).min(swa_end);
+                        if blk_end > rem_first {
+                            run_load(self, sess, rem_first, blk_end - rem_first, old_last_blk * KV_BLK);
+                            let job = [(
+                                sess.swa_pages[old_last_blk % SWA_INNER_BLKS],
+                                sess.swa_outer_pages[old_last_blk % SWA_OUTER_BLKS],
+                            )];
+                            run_grad(self, &job);
+                            rem_first = blk_end;
+                        }
+                    }
+                }
+                // Step 3: Load remaining new SWA keys directly into outer/inner rings
+                if swa_end > rem_first {
+                    run_load(self, sess, rem_first, swa_end - rem_first, new_inner_p0);
+                }
+            } else {
+                while sess.swa_pages.len() < SWA_RING_BLKS {
+                    let p = self.alloc_swa_page()?;
+                    sess.swa_pages.push(p);
+                }
+                let mp = self.meta[1].contents().as_ptr() as *mut u32;
+                unsafe { for (k, &p) in sess.swa_pages.iter().enumerate() { *mp.add(k) = p; } }
+                #[repr(C)] #[derive(Clone, Copy)]
+                struct CopyToPagedArgsLocal { n_pos: u32, pos0: u32, src_cap: u32, is_swa: u32, pool_cap: u32, pt_off: u32, pt_mod: u32, suf0: u32 }
+                let cb = self.eng.gpu.cmd();
+                let e = Enc::new(&cb);
+                e.pso(&self.eng.gpu.pso("k_copy_kv_to_paged"));
+                e.buf(&self.eng.kv_swa.borrow(), 0, 3);
+                e.buf(&self.meta[1], 0, 7);
+                e.buf(&self.swa_pool, 0, 8);
+                let ca = CopyToPagedArgsLocal {
+                    n_pos: swa_nkeys as u32, pos0: swa_src_first_pos as u32, src_cap: self.eng.swa_cap.get() as u32,
+                    is_swa: 1, pool_cap: self.swa_cap as u32, pt_off: 0, pt_mod: SWA_RING_BLKS as u32, suf0: swa_src_first_pos as u32,
+                };
+                e.bytes(&ca, 5);
+                e.dispatch((swa_nkeys, NKV, N_SWA), 32);
+                e.end();
+                cb.commit();
+                cb.waitUntilCompleted();
+            }
+        }
+
+        // 3. Compress Engine's full KV [src_pos0 .. src_pos0 + n_toks) into WHT pages at [start_pos .. end_pos)
+        let first_lp = start_pos / pt;
+        let last_lp = (end_pos - 1) / pt;
+        let n_span_pages = last_lp - first_lp + 1;
+        let mut hot_pids: Vec<u32> = Vec::with_capacity(n_span_pages);
+        for lp in first_lp..=last_lp {
+            while sess.logical_pages.len() <= lp {
+                let lid = self.radix.alloc_logical_id();
+                sess.logical_pages.push(lid);
+                sess.sum_pages.push(u32::MAX);
+                sess.page_hashes.push(None);
+            }
+            let is_existing_partial = lp == first_lp && (start_pos % pt) != 0;
+            let pid = self.lru.alloc_for_logical(
+                sess.logical_pages[lp],
+                true,
+                !is_existing_partial,
+                &mut self.cold,
+                &self.kv_comp,
+                &self.kv_scales,
+            )?;
+            hot_pids.push(pid);
+        }
+        let mp = self.meta[1].contents().as_ptr() as *mut u32;
+        unsafe { for (i, &p) in hot_pids.iter().enumerate() { *mp.add(i) = p; } }
+        {
+            let cb = self.eng.gpu.cmd();
+            let e = Enc::new(&cb);
+            e.pso(&self.eng.gpu.pso("k_fp16_to_wht_compress"));
+            e.buf(&self.eng.kv_full.borrow(), 0, 3);
+            e.buf(&self.kv_comp, 0, 6);
+            e.buf(&self.meta[1], 0, 7);
+            e.buf(&self.kv_scales, 0, 8);
+            e.buf(&self.k_dc_mean, 0, 10);
+            for layer_slot in 0..N_SLOT {
+                let (is_swa, fi) = self.eng.slot_kind[layer_slot];
+                if is_swa { continue; }
+                let fa = Fp16ToWhtArgs {
+                    src_cap: self.eng.full_cap.get() as u32,
+                    src_pos0: src_pos0 as u32,
+                    slot_idx: fi as u32,
+                    layer_slot: layer_slot as u32,
+                    pool_cap: self.lru.hot_cap as u32,
+                    page_toks: pt as u32,
+                    kv_bits: self.cfg.kv_bits,
+                    dst_pos0: start_pos as u32,
+                    pid_list_off: 0,
+                    n_toks: n_toks as u32,
+                    use_dc_mean: self.use_dc_mean as u32,
+                    pad1: 0,
+                };
+                e.bytes(&fa, 5);
+                e.dispatch((n_toks, NKV, 1), 128);
+            }
+            e.end();
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
+
+        // 4. Summarize every newly completed full page in `first_lp .. (end_pos / pt)` on GPU
+        let completed_end = end_pos / pt;
+        let mut to_sum: Vec<(usize, u32, u32)> = Vec::new();
+        for lp in first_lp..completed_end {
+            if sess.sum_pages[lp] == u32::MAX {
+                let spid = self.alloc_sum_page()?;
+                sess.sum_pages[lp] = spid;
+                to_sum.push((lp, hot_pids[lp - first_lp], spid));
+            }
+        }
+        if !to_sum.is_empty() {
+            let n_sum = to_sum.len();
+            let pid_off = 0usize;
+            let spid_off = n_sum.div_ceil(16) * 16;
+            unsafe {
+                for (i, &(_, pid, spid)) in to_sum.iter().enumerate() {
+                    *mp.add(pid_off + i) = pid;
+                    *mp.add(spid_off + i) = spid;
+                }
+            }
+            let cb = self.eng.gpu.cmd();
+            let e = Enc::new(&cb);
+            let kname = if self.cfg.use_wht2_sketch { "k_page_summarize_wht2" } else { "k_page_summarize_kv" };
+            e.pso(&self.eng.gpu.pso(kname));
+            e.buf(&self.kv_comp, 0, 3);
+            e.buf(&self.kv_scales, 0, 6);
+            e.buf(&self.meta[1], 0, 7);
+            e.buf(&self.kv_sum, 0, 8);
+            let sa = PageSumArgs {
+                pool_cap: self.lru.hot_cap as u32,
+                slot_idx: 0,
+                page_toks: pt as u32,
+                kv_bits: self.cfg.kv_bits,
+                n_pages: n_sum as u32,
+                pid_list_off: pid_off as u32,
+                spid_list_off: spid_off as u32,
+                cnt_list_off: u32::MAX,
+                sum_pool_cap: self.cfg.sum_pool_pages as u32,
+                pad0: 0, pad1: 0, pad2: 0,
+            };
+            e.bytes(&sa, 5);
+            e.dispatch((n_sum, NKV, N_FULL), 128);
+            e.end();
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
+
+        for pid in hot_pids { self.lru.unpin(pid); }
+        sess.pos = end_pos;
+        Ok(())
+    }
+
     /// Streaming chunked 256K+ prefill! Processes arbitrary `toks.len()` in `chunk_size` chunks,
     /// deduplicating prefix blocks through `RadixPageTable`, summarizing completed pages on GPU,
     /// and evicting cold far pages directly to `F_NOCACHE` NVMe so RAM NEVER exceeds `max_mem_bytes`!
@@ -3430,6 +3789,46 @@ impl<'a> Kv256kPool<'a> {
             }
         }
         Ok(out)
+    }
+
+    /// Execute one complete 48-layer sparse-WHT decode step for a single session, optionally
+    /// skipping the 200K-vocab LM head & argmax when ingesting non-final prompt tokens!
+    pub fn step_one(&mut self, sess: &mut Kv256kSession, tok_in: u32, compute_argmax: bool) -> Result<u32, String> {
+        sess.next_tok = tok_in;
+        let skip = if compute_argmax {
+            0
+        } else {
+            (1 << C_OMIX) | (1 << C_LMHEAD) | (1 << C_ARGMAX)
+        };
+        let (cb, pinned) = self.encode_decode_step_impl(
+            std::slice::from_mut(sess),
+            0,
+            0,
+            1,
+            skip,
+            compute_argmax,
+        )?;
+        cb.commit();
+        cb.waitUntilCompleted();
+        self.unpin_pids(&pinned);
+        let pred = if compute_argmax {
+            unsafe { *(self.toks[1].contents().as_ptr() as *const i32) as u32 }
+        } else {
+            0
+        };
+        sess.pos += 1;
+        let pt = self.cfg.page_toks;
+        if sess.pos % pt == 0 {
+            let lp = sess.pos / pt - 1;
+            if lp < sess.sum_pages.len() && sess.sum_pages[lp] == u32::MAX {
+                if let Some(hot_pid) = self.lru.peek_hot(sess.logical_pages[lp]) {
+                    let spid = self.alloc_sum_page()?;
+                    self.summarize_completed_page(hot_pid, spid, pt as u32);
+                    sess.sum_pages[lp] = spid;
+                }
+            }
+        }
+        Ok(pred)
     }
 
     pub fn unpin_pids(&mut self, pids: &[u32]) {
