@@ -4531,7 +4531,7 @@ pub fn run_needle_1m_10m(eng: &Engine, tk: &Tokenizer, top_k_pages: usize, effor
         ("1M", 455 * 2304 + EXT),
         ("10M", 4551 * 2304 + EXT),
     ];
-    let scales: Vec<(&str, usize)> = if subtest == "10m" {
+    let scales: Vec<(&str, usize)> = if subtest == "10m" || subtest == "10m-cot" {
         vec![scales_all[1]]
     } else if subtest == "1m" {
         vec![scales_all[0]]
@@ -4657,7 +4657,12 @@ pub fn run_needle_1m_10m(eng: &Engine, tk: &Tokenizer, top_k_pages: usize, effor
 
         // Regimes to test: `(tag, use_centroids, tau_pos_cap, regime_cot)`
         let active_softmax_tok = EXT + top_k * pt; // 1024 + 64*128 = 9216
-        let regimes: Vec<(&str, bool, usize, bool)> = if subtest == "10m" {
+        let regimes: Vec<(&str, bool, usize, bool)> = if subtest == "10m-cot" {
+            vec![
+                ("cent=ON  tau=nat  CoT0.1", true, 0, true),
+                ("cent=OFF tau=nat  CoT0.1", false, 0, true),
+            ]
+        } else if subtest == "10m" {
             vec![
                 ("cent=OFF tau=9K  direct", false, active_softmax_tok, false),
                 ("cent=ON  tau=256K direct", true, 262_144, false),
@@ -4754,11 +4759,7 @@ pub fn run_needle_1m_10m(eng: &Engine, tk: &Tokenizer, top_k_pages: usize, effor
             qsess.pos = target_pos;
 
             let q_str = if regime_cot {
-                format!(
-                    "<|end_message|><|message_system|><|content_text|>Thinking effort level: 0.1<|end_message|>\
-                     <|message_user|><|content_text|>Question: {}<|end_message|>",
-                    nd.question
-                )
+                format!("\nQuestion: {}<|end_message|>", nd.question)
             } else {
                 format!("\nQuestion: {}<|end_message|><|message_model|><|content_text|>", nd.question)
             };
@@ -4804,10 +4805,11 @@ pub fn run_needle_1m_10m(eng: &Engine, tk: &Tokenizer, top_k_pages: usize, effor
             }
             let _q_ms = t_q.elapsed().as_secs_f64() * 1e3;
 
-            let max_gen = if regime_cot { 280usize } else { 48usize };
+            let max_gen = if regime_cot { 384usize } else { 48usize };
             let mut gen_toks: Vec<u32> = Vec::with_capacity(max_gen);
             let mut cur_tok = pred;
             let mut answer_bytes: Vec<u8> = Vec::new();
+            let mut think_bytes: Vec<u8> = Vec::new();
             let mut in_think = false;
             for _ in 0..max_gen {
                 if cur_tok == tk.eos { break; }
@@ -4816,7 +4818,9 @@ pub fn run_needle_1m_10m(eng: &Engine, tk: &Tokenizer, top_k_pages: usize, effor
                     let s = String::from_utf8_lossy(&tk.decode_bytes(cur_tok)).to_string();
                     if s == "<|content_thinking|>" { in_think = true; }
                     else if s == "<|content_text|>" || s == "<|end_message|>" { in_think = false; }
-                } else if !in_think {
+                } else if in_think {
+                    think_bytes.extend_from_slice(&tk.decode_bytes(cur_tok));
+                } else {
                     answer_bytes.extend_from_slice(&tk.decode_bytes(cur_tok));
                 }
                 if gen_toks.len() >= max_gen { break; }
@@ -4832,16 +4836,24 @@ pub fn run_needle_1m_10m(eng: &Engine, tk: &Tokenizer, top_k_pages: usize, effor
             }
 
             let ans = String::from_utf8_lossy(&answer_bytes).trim().replace('\n', " ");
+            let think_str = String::from_utf8_lossy(&think_bytes).trim().replace('\n', " ");
             let ok = ans.contains(nd.want_code) && ans.contains(nd.want_sector);
             if ok { passed_cnt += 1; }
             let med_ms = median_f64(step_ms_samples);
             let dist_tok = target_pos.saturating_sub(needle_exact_lps[ni] * pt);
+            let shown = if !ans.is_empty() {
+                ans.clone()
+            } else {
+                let tail: String = think_str.chars().rev().take(120).collect::<String>().chars().rev().collect();
+                format!("[still thinking ({} tok): ...{tail}]", gen_toks.len())
+            };
             println!(
-                "  [{scale_name}] {:9} (dist={:9} tok, lp={:5}/{:5}) | {} | blk23 Top-{scale_top_k} hits={heads_hit_topk}/8 (best rank #{best_rank_any_head}) | {med_ms:.1} ms/tok ({:.1} tok/s) | {}",
+                "  [{scale_name}] {:9} (dist={:9} tok, lp={:5}/{:5}) | {} | blk23 Top-{scale_top_k} hits={heads_hit_topk}/8 (best rank #{best_rank_any_head}) | {med_ms:.1} ms/tok ({:.1} tok/s) | {} ({} gen tok)",
                 nd.label, dist_tok, target_lp, n_far_pages,
                 if ok { "PASS" } else { "FAIL" },
                 1000.0 / med_ms.max(0.01),
-                ans
+                shown,
+                gen_toks.len()
             );
             // Restore the haystack summary slots overwritten by needle `ni` before next depth probe!
             for k in 0..needle_chunk_pages {
