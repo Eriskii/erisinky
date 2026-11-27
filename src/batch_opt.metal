@@ -2986,3 +2986,417 @@ kernel void k_attn_swa_tiered_b(device const uchar * PB [[buffer(1)]], device fl
         out[oi] = half((O / L) * sigm(float(gate[oi])));
     }
 }
+
+// ---- 6D. Batched Tiered-SWA Mid-Session Chunked Prefill Kernels (t <= 256) ----
+// 1. k_swa_prep_chunk: causal 4-tap K/V conv (reading prior FP16 CS at p0) + Q/K/R clip + V RMSNorm ->
+//    unrotated da.qp (half), da.rp (f32), and exact FP16 CHUNK_KV ([2][NKV][T][HD] at buffer(11)).
+//    Grid: (T, NKV, 1), TG = 128.
+struct SwaChunkPrepArgs {
+    uint T, p0, layer_slot, max_batch;
+    uint seq_cs_off, q_off, k_off, v_off;
+    uint r_off, qp_off, rp_off, kconv_t_w;
+    uint vconv_t_w, qclip_w, relclip_w, pad0;
+};
+
+kernel void k_swa_prep_chunk(device const uchar * PB [[buffer(1)]], device float * A [[buffer(2)]],
+                             device const half * CS [[buffer(4)]], constant SwaChunkPrepArgs & a [[buffer(5)]],
+                             device const uint * META [[buffer(7)]],
+                             device half * CHUNK_KV [[buffer(11)]],
+                             uint2 tgp [[threadgroup_position_in_grid]],
+                             ushort tid [[thread_index_in_threadgroup]],
+                             ushort sg [[simdgroup_index_in_threadgroup]],
+                             ushort lane [[thread_index_in_simdgroup]]) {
+    threadgroup float red[4][8];
+    const uint idx = tgp.x, g = tgp.y;
+    if (idx >= a.T) return;
+
+    const uint seq_cs = META[a.seq_cs_off];
+    device const float * qclip = (device const float *) (PB + a.qclip_w);
+    float q[3];
+    for (int h = 0; h < 3; h++) {
+        const uint H = g * 3u + (uint) h;
+        const half qh = ((device const half *) (A + a.q_off))[(ulong) idx * (NH * HD) + H * HD + tid];
+        q[h] = float(qh) * qclip[H * HD + tid];
+    }
+
+    const uint c = g * HD + tid;
+    const uint dim = NKV * HD;
+    const float scl = 0.4472135954999579f;
+    const uint tap0 = a.p0 % 3u, tap1 = (tap0 == 2u) ? 0u : (tap0 + 1u), tap2 = (tap1 == 2u) ? 0u : (tap1 + 1u);
+    const uint taps[3] = { tap0, tap1, tap2 };
+    float kx = 0.0f, vx = 0.0f;
+    for (int which = 0; which < 2; which++) {
+        const uint xo = which == 0 ? a.k_off : a.v_off;
+        device const half * hb = CS + cs_branch_base(a.layer_slot, (uint) which, a.max_batch) + (ulong) seq_cs * (3ul * dim);
+        device const float * w = (device const float *) (PB + (which == 0 ? a.kconv_t_w : a.vconv_t_w));
+        float x[4];
+        for (int j = 0; j < 4; j++) {
+            const int lt = int(idx) - 3 + j;
+            x[j] = lt >= 0 ? A[xo + (ulong) lt * dim + c] : float(hb[(ulong) taps[3 + lt] * dim + c]);
+        }
+        const float acc = w[0 * dim + c] * x[0] + w[1 * dim + c] * x[1] + w[2 * dim + c] * x[2] + w[3 * dim + c] * x[3];
+        if (which == 0) kx = (x[3] + acc) * scl; else vx = (x[3] + acc) * scl;
+    }
+
+    float r = 0.0f;
+    if (tid < 48) {
+        const uint h = tid / 16u, i = tid % 16u, H = g * 3u + h;
+        r = A[a.r_off + (ulong) idx * (NH * NREL) + H * NREL + i] * ((device const float *) (PB + a.relclip_w))[H * NREL + i];
+    }
+    float rn = r * r;
+    rn += simd_shuffle_xor(rn, 1); rn += simd_shuffle_xor(rn, 2); rn += simd_shuffle_xor(rn, 4); rn += simd_shuffle_xor(rn, 8);
+    {
+        const float s0 = simd_sum(q[0] * q[0]), s1 = simd_sum(q[1] * q[1]), s2 = simd_sum(q[2] * q[2]);
+        const float s3 = simd_sum(kx * kx), s4 = simd_sum(vx * vx);
+        if (lane == 0) { red[sg][0] = s0; red[sg][1] = s1; red[sg][2] = s2; red[sg][3] = s3; red[sg][4] = s4; }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float tot[5];
+    for (int i = 0; i < 5; i++) tot[i] = red[0][i] + red[1][i] + red[2][i] + red[3][i];
+
+    device half * qp_out = (device half *) (A + a.qp_off);
+    for (int h = 0; h < 3; h++) {
+        const float f = clamp(QK_CLIP / (sqrt(tot[h]) + 1e-6f), 0.0f, 1.0f) * 0.08838834764831845f;
+        qp_out[(ulong) idx * (NH * HD) + (g * 3u + (uint) h) * HD + tid] = half(q[h] * f);
+    }
+    if (tid < 48) {
+        A[a.rp_off + (ulong) idx * (NH * NREL) + (g * 3u + tid / 16u) * NREL + tid % 16u] =
+            r * clamp(REL_CLIP / (sqrt(rn) + 1e-6f), 0.0f, 1.0f);
+    }
+    const float kf = clamp(QK_CLIP / (sqrt(tot[3]) + 1e-6f), 0.0f, 1.0f);
+    const float vf = rsqrt(tot[4] / float(HD) + 1e-6f);
+    CHUNK_KV[(((0ul * NKV + (ulong) g) * (ulong) a.T + (ulong) idx) * HD) + tid] = half(kx * kf);
+    CHUNK_KV[(((1ul * NKV + (ulong) g) * (ulong) a.T + (ulong) idx) * HD) + tid] = half(vx * vf);
+}
+
+// 2. k_attn_swa_tiered_chunk: causal Tiered-SWA attention for a chunk [p0 .. p0 + T) reading unmodified
+//    prior SWA_INNER + SWA_OUTER_COMP plus current chunk's exact FP16 CHUNK_KV (buffer(11)).
+//    Grid: (NKV, T, 1), TG = 128.
+struct TieredSwaChunkAttnArgs {
+    uint T, p0, old_inner_p0, inner_cap;
+    uint outer_cap, slot_idx, inner_fp16, inner_pt_off;
+    uint outer_pt_off, qp_off, rp_off, sink_off;
+    uint gate_off, out_off, relbias_w, pad0;
+};
+
+kernel void k_attn_swa_tiered_chunk(device const uchar * PB [[buffer(1)]], device float * A [[buffer(2)]],
+                                    device const uchar * SWA_INNER [[buffer(3)]],
+                                    constant TieredSwaChunkAttnArgs & a [[buffer(5)]],
+                                    device const half * SWA_INNER_SC [[buffer(6)]],
+                                    device const uint * META [[buffer(7)]],
+                                    device const uint * SWA_OUTER_COMP [[buffer(8)]],
+                                    device const half * SWA_OUTER_SC [[buffer(9)]],
+                                    device const half * CHUNK_KV [[buffer(11)]],
+                                    uint2 tgp [[threadgroup_position_in_grid]],
+                                    ushort tid [[thread_index_in_threadgroup]],
+                                    ushort sg [[simdgroup_index_in_threadgroup]],
+                                    ushort lane [[thread_index_in_simdgroup]]) {
+    threadgroup float4 qs4[3][HD / 4];
+    threadgroup float rs[3][NREL];
+    threadgroup float ms_[4][3], ls_[4][3];
+    threadgroup float4 os_[4][3][32];
+    threadgroup float o_in[3][HD];
+    threadgroup float m_in_tot[3], l_in_tot[3];
+    threadgroup float wht_sh[128];
+
+    const uint g = tgp.x, q_idx = tgp.y;
+    if (q_idx >= a.T) return;
+
+    const uint pos = a.p0 + q_idx;
+    const uint nkeys = min(pos + 1u, (uint) EXT);
+    const uint first_pos = pos + 1u - nkeys;
+
+    // Exact unrotated interval: prior SWA_INNER [in_a .. p0) followed by current CHUNK_KV [p0 .. pos]
+    const uint in_a = max(first_pos, a.old_inner_p0);
+    const uint n_old_in = (a.p0 > in_a) ? (a.p0 - in_a) : 0u;
+    const uint n_cur = q_idx + 1u;
+    const uint n_exact = n_old_in + n_cur;
+
+    // Prior WHT-K2V2 outer interval: [first_pos .. min(p0, old_inner_p0))
+    const uint out_end = min(a.p0, a.old_inner_p0);
+    const uint n_outer = (first_pos < out_end) ? (out_end - first_pos) : 0u;
+
+    device const uint * inner_pt = META + a.inner_pt_off;
+    device const uint * outer_pt = META + a.outer_pt_off;
+
+    device const half * qp_t = (device const half *) (A + a.qp_off) + (ulong) q_idx * (NH * HD);
+    for (int h = 0; h < 3; h++) {
+        ((threadgroup float *) qs4[h])[tid] = float(qp_t[(g * 3u + (uint) h) * HD + tid]);
+    }
+    if (tid < 48) {
+        const uint h = tid / 16u, i = tid % 16u, H = g * 3u + h;
+        rs[h][i] = A[a.rp_off + (ulong) q_idx * (NH * NREL) + H * NREL + i];
+    }
+    float sink[3];
+    for (int h = 0; h < 3; h++) sink[h] = A[a.sink_off + (ulong) q_idx * NH + g * 3u + (uint) h];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    device const float * relb = (device const float *) (PB + a.relbias_w);
+    const ushort kk = lane / 4, pp = lane % 4;
+    float4 rl[3];
+    for (int h = 0; h < 3; h++) rl[h] = *(threadgroup const float4 *) (&rs[h][pp * 4]);
+
+    // ---- Pass 1: Prior SWA_INNER [in_a .. p0) + Current CHUNK_KV [p0 .. pos] ----
+    float m[3] = {SPARSE_NEG_INF, SPARSE_NEG_INF, SPARSE_NEG_INF};
+    float l[3] = {0.0f, 0.0f, 0.0f};
+    float4 o[3] = {0.0f, 0.0f, 0.0f};
+    for (uint jb = sg * 8u; jb < n_exact; jb += 32u) {
+        const uint j = jb + kk;
+        const bool valid = j < n_exact;
+        const uint jc = min(j, n_exact - 1u);
+        const bool is_cur = jc >= n_old_in;
+        const uint p = is_cur ? (a.p0 + (jc - n_old_in)) : (in_a + jc);
+        uint pid = 0u, boff = 0u;
+        float acc[3] = {0.0f, 0.0f, 0.0f};
+        if (valid) {
+            if (is_cur) {
+                const uint c_idx = jc - n_old_in;
+                device const half4 * kr = (device const half4 *) (CHUNK_KV + (((0ul * NKV + (ulong) g) * (ulong) a.T + (ulong) c_idx) * HD) + pp * 32u);
+                for (int c = 0; c < 8; c++) {
+                    const float4 kf = float4(kr[c]);
+                    for (int h = 0; h < 3; h++) acc[h] += dot(qs4[h][pp * 8 + c], kf);
+                }
+            } else {
+                pid = inner_pt[(p / KV_BLK) % SWA_INNER_BLKS];
+                boff = p % KV_BLK;
+                const ulong ivk = swa_inner_vec_idx(pid, a.inner_cap, a.slot_idx, g, 0u, boff);
+                if (a.inner_fp16 != 0u) {
+                    device const half4 * kr = (device const half4 *) (((device const half *) SWA_INNER) + ivk * HD + pp * 32u);
+                    for (int c = 0; c < 8; c++) {
+                        const float4 kf = float4(kr[c]);
+                        for (int h = 0; h < 3; h++) acc[h] += dot(qs4[h][pp * 8 + c], kf);
+                    }
+                } else {
+                    device const packed_char4 * kr = (device const packed_char4 *) (((device const char *) SWA_INNER) + ivk * HD + pp * 32u);
+                    const float ks = float(SWA_INNER_SC[ivk]);
+                    for (int c = 0; c < 8; c++) {
+                        const float4 kf = float4(char4(kr[c]));
+                        for (int h = 0; h < 3; h++) acc[h] += dot(qs4[h][pp * 8 + c], kf);
+                    }
+                    for (int h = 0; h < 3; h++) acc[h] *= ks;
+                }
+            }
+            const uint d = pos - p;
+            if (d < EXT) {
+                const float4 bb = *(device const float4 *) (relb + d * NREL + pp * 4u);
+                for (int h = 0; h < 3; h++) acc[h] += dot(rl[h], bb);
+            }
+        }
+        float pr[3];
+        for (int h = 0; h < 3; h++) {
+            float t = acc[h];
+            t += simd_shuffle_xor(t, 1); t += simd_shuffle_xor(t, 2);
+            t = valid ? (t - sink[h]) : SPARSE_NEG_INF;
+            const float blk_mx = simd_max(t);
+            if (blk_mx > SPARSE_NEG_THR) {
+                const float mx = max(m[h], blk_mx);
+                const float sc = (m[h] > SPARSE_NEG_THR) ? exp(m[h] - mx) : 0.0f;
+                pr[h] = valid ? exp(t - mx) : 0.0f;
+                l[h] = l[h] * sc + simd_sum(pr[h]) * 0.25f;
+                m[h] = mx;
+                o[h] *= sc;
+            } else {
+                pr[h] = 0.0f;
+            }
+        }
+        if (a.inner_fp16 == 0u && valid && !is_cur) {
+            const ulong ivv = swa_inner_vec_idx(pid, a.inner_cap, a.slot_idx, g, 1u, boff);
+            const float vsc = float(SWA_INNER_SC[ivv]);
+            for (int h = 0; h < 3; h++) pr[h] *= vsc;
+        }
+        for (ushort q2 = 0; q2 < 8; q2++) {
+            const uint jq = jb + q2;
+            if (jq >= n_exact) break;
+            float4 v;
+            if (jq >= n_old_in) {
+                const uint c_idx = jq - n_old_in;
+                v = float4(*(device const half4 *) (CHUNK_KV + (((1ul * NKV + (ulong) g) * (ulong) a.T + (ulong) c_idx) * HD) + lane * 4u));
+            } else {
+                const uint pq = in_a + jq;
+                const uint qpid = inner_pt[(pq / KV_BLK) % SWA_INNER_BLKS];
+                const ulong ivv = swa_inner_vec_idx(qpid, a.inner_cap, a.slot_idx, g, 1u, pq % KV_BLK);
+                if (a.inner_fp16 != 0u) {
+                    v = float4(*(device const half4 *) (((device const half *) SWA_INNER) + ivv * HD + lane * 4u));
+                } else {
+                    v = float4(char4(*(device const packed_char4 *) (((device const char *) SWA_INNER) + ivv * HD + lane * 4u)));
+                }
+            }
+            for (int h = 0; h < 3; h++) o[h] += simd_shuffle(pr[h], q2 * 4) * v;
+        }
+    }
+
+    if (lane == 0) {
+        for (int h = 0; h < 3; h++) { ms_[sg][h] = m[h]; ls_[sg][h] = l[h]; }
+    }
+    for (int h = 0; h < 3; h++) os_[sg][h][lane] = o[h];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (int h = 0; h < 3; h++) {
+        float Mi = SPARSE_NEG_INF;
+        for (int s2 = 0; s2 < 4; s2++) if (ms_[s2][h] > SPARSE_NEG_THR) Mi = max(Mi, ms_[s2][h]);
+        float Li = 0.0f, Oi = 0.0f;
+        if (Mi > SPARSE_NEG_THR) {
+            for (int s2 = 0; s2 < 4; s2++) {
+                if (ms_[s2][h] > SPARSE_NEG_THR) {
+                    const float w = exp(ms_[s2][h] - Mi);
+                    Li += w * ls_[s2][h];
+                    Oi += w * ((threadgroup const float *) os_[s2][h])[tid];
+                }
+            }
+        }
+        o_in[h][tid] = Oi;
+        if (tid == 0) { m_in_tot[h] = Mi; l_in_tot[h] = Li; }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    device half * out = (device half *) (A + a.out_off);
+    device const half * gate = (device const half *) (A + a.gate_off);
+
+    if (n_outer == 0u) {
+        for (int h = 0; h < 3; h++) {
+            const uint H = g * 3u + (uint) h;
+            const float Mi = m_in_tot[h];
+            const float M = (Mi > SPARSE_NEG_THR) ? max(0.0f, Mi) : 0.0f;
+            const float wi = (Mi > SPARSE_NEG_THR) ? exp(Mi - M) : 0.0f;
+            const float L = exp(-M) + wi * l_in_tot[h];
+            const float O = wi * o_in[h][tid];
+            const ulong oi = (ulong) q_idx * (NH * HD) + H * HD + tid;
+            out[oi] = half((O / L) * sigm(float(gate[oi])));
+        }
+        return;
+    }
+
+    // ---- Pass 2: Prior WHT-K2V2 SWA_OUTER [first_pos .. out_end) ----
+    const float sign = rademacher_sign(100u + a.slot_idx, g, tid);
+    for (int h = 0; h < 3; h++) {
+        const float qr = wht128_tg(sign * ((threadgroup const float *) qs4[h])[tid], tid, sg, lane, wht_sh);
+        ((threadgroup float *) qs4[h])[tid] = qr;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (int h = 0; h < 3; h++) { m[h] = SPARSE_NEG_INF; l[h] = 0.0f; o[h] = 0.0f; }
+    for (uint jb = sg * 8u; jb < n_outer; jb += 32u) {
+        const uint j = jb + kk;
+        const bool valid = j < n_outer;
+        const uint p = first_pos + min(j, n_outer - 1u);
+        const uint pid = outer_pt[(p / KV_BLK) % SWA_OUTER_BLKS];
+        const uint boff = p % KV_BLK;
+        float acc[3] = {0.0f, 0.0f, 0.0f};
+        if (valid) {
+            const ulong ovk = comp_vec_idx(pid, a.outer_cap, a.slot_idx, g, 0u, boff, KV_BLK);
+            dot_wht_k32(SWA_OUTER_COMP, SWA_OUTER_SC, 2u, ovk * 8ul, ovk, pp, qs4, acc);
+            const uint d = pos - p;
+            if (d < EXT) {
+                const float4 bb = *(device const float4 *) (relb + d * NREL + pp * 4u);
+                for (int h = 0; h < 3; h++) acc[h] += dot(rl[h], bb);
+            }
+        }
+        float pr[3];
+        for (int h = 0; h < 3; h++) {
+            float t = acc[h];
+            t += simd_shuffle_xor(t, 1); t += simd_shuffle_xor(t, 2);
+            t = valid ? (t - sink[h]) : SPARSE_NEG_INF;
+            const float blk_mx = simd_max(t);
+            if (blk_mx > SPARSE_NEG_THR) {
+                const float mx = max(m[h], blk_mx);
+                const float sc = (m[h] > SPARSE_NEG_THR) ? exp(m[h] - mx) : 0.0f;
+                pr[h] = valid ? exp(t - mx) : 0.0f;
+                l[h] = l[h] * sc + simd_sum(pr[h]) * 0.25f;
+                m[h] = mx;
+                o[h] *= sc;
+            } else {
+                pr[h] = 0.0f;
+            }
+        }
+        for (ushort q2 = 0; q2 < 8; q2++) {
+            const uint jq = jb + q2;
+            if (jq >= n_outer) break;
+            const uint pq = first_pos + jq;
+            const uint qpid = outer_pt[(pq / KV_BLK) % SWA_OUTER_BLKS];
+            const ulong ovv = comp_vec_idx(qpid, a.outer_cap, a.slot_idx, g, 1u, pq % KV_BLK, KV_BLK);
+            const float4 v = load_wht_v4(SWA_OUTER_COMP, SWA_OUTER_SC, 2u, ovv * 8ul, ovv, lane);
+            for (int h = 0; h < 3; h++) o[h] += simd_shuffle(pr[h], q2 * 4) * v;
+        }
+    }
+
+    if (lane == 0) {
+        for (int h = 0; h < 3; h++) { ms_[sg][h] = m[h]; ls_[sg][h] = l[h]; }
+    }
+    for (int h = 0; h < 3; h++) os_[sg][h][lane] = o[h];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (int h = 0; h < 3; h++) {
+        const uint H = g * 3u + (uint) h;
+        float Mo = SPARSE_NEG_INF;
+        for (int s2 = 0; s2 < 4; s2++) if (ms_[s2][h] > SPARSE_NEG_THR) Mo = max(Mo, ms_[s2][h]);
+        float Lo = 0.0f, Oo_rot = 0.0f;
+        if (Mo > SPARSE_NEG_THR) {
+            for (int s2 = 0; s2 < 4; s2++) {
+                if (ms_[s2][h] > SPARSE_NEG_THR) {
+                    const float w = exp(ms_[s2][h] - Mo);
+                    Lo += w * ls_[s2][h];
+                    Oo_rot += w * ((threadgroup const float *) os_[s2][h])[tid];
+                }
+            }
+        }
+        const float Oo_unrot = sign * wht128_tg(Oo_rot, tid, sg, lane, wht_sh);
+        const float Mi = m_in_tot[h];
+        float M = 0.0f;
+        if (Mi > SPARSE_NEG_THR) M = max(M, Mi);
+        if (Mo > SPARSE_NEG_THR) M = max(M, Mo);
+        const float wi = (Mi > SPARSE_NEG_THR) ? exp(Mi - M) : 0.0f;
+        const float wo = (Mo > SPARSE_NEG_THR) ? exp(Mo - M) : 0.0f;
+        const float L = exp(-M) + wi * l_in_tot[h] + wo * Lo;
+        const float O = wi * o_in[h][tid] + wo * Oo_unrot;
+        const ulong oi = (ulong) q_idx * (NH * HD) + H * HD + tid;
+        out[oi] = half((O / L) * sigm(float(gate[oi])));
+    }
+}
+
+// 3. k_swa_commit_chunk: commits the chunk's T new SWA tokens from CHUNK_KV (buffer(11)) into SWA_INNER
+//    after any graduating inner blocks have been compressed into SWA_OUTER.
+//    Grid: (T, NKV, 1), TG = 128.
+struct SwaCommitChunkArgs {
+    uint T, p0, inner_cap, slot_idx;
+    uint inner_fp16, inner_pt_off, pad0, pad1;
+};
+
+kernel void k_swa_commit_chunk(device uchar * SWA_INNER [[buffer(3)]], constant SwaCommitChunkArgs & a [[buffer(5)]],
+                               device half * SWA_INNER_SC [[buffer(6)]], device const uint * META [[buffer(7)]],
+                               device const half * CHUNK_KV [[buffer(11)]],
+                               uint2 tgp [[threadgroup_position_in_grid]],
+                               ushort tid [[thread_index_in_threadgroup]],
+                               ushort sg [[simdgroup_index_in_threadgroup]],
+                               ushort lane [[thread_index_in_simdgroup]]) {
+    threadgroup float red4[4];
+    const uint idx = tgp.x, g = tgp.y;
+    if (idx >= a.T) return;
+
+    const float k = float(CHUNK_KV[(((0ul * NKV + (ulong) g) * (ulong) a.T + (ulong) idx) * HD) + tid]);
+    const float v = float(CHUNK_KV[(((1ul * NKV + (ulong) g) * (ulong) a.T + (ulong) idx) * HD) + tid]);
+    const uint p = a.p0 + idx;
+    const uint blk = p / KV_BLK;
+    const uint boff = p % KV_BLK;
+    const uint pid = META[a.inner_pt_off + (blk % SWA_INNER_BLKS)];
+    const ulong ivk = swa_inner_vec_idx(pid, a.inner_cap, a.slot_idx, g, 0u, boff);
+    const ulong ivv = swa_inner_vec_idx(pid, a.inner_cap, a.slot_idx, g, 1u, boff);
+    if (a.inner_fp16 != 0u) {
+        device half * dst = (device half *) SWA_INNER;
+        dst[ivk * HD + tid] = half(k);
+        dst[ivv * HD + tid] = half(v);
+    } else {
+        const float amk = simd_max(fabs(k));
+        if (lane == 0) red4[sg] = amk;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        const float sck = max(max(max(red4[0], red4[1]), max(red4[2], red4[3])) / 127.0f, 1e-7f);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        const float amv = simd_max(fabs(v));
+        if (lane == 0) red4[sg] = amv;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        const float scv = max(max(max(red4[0], red4[1]), max(red4[2], red4[3])) / 127.0f, 1e-7f);
+        device char * dst = (device char *) SWA_INNER;
+        dst[ivk * HD + tid] = char(clamp((int) rint(k / sck), -127, 127));
+        dst[ivv * HD + tid] = char(clamp((int) rint(v / scv), -127, 127));
+        if (tid == 0) { SWA_INNER_SC[ivk] = half(sck); SWA_INNER_SC[ivv] = half(scv); }
+    }
+}

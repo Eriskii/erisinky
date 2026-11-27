@@ -359,6 +359,28 @@ struct TieredSwaAttnArgs {
     relbias_w: u32, pad2: u32, pad3: u32, pad4: u32,
 }
 
+#[repr(C)] #[derive(Clone, Copy, Default)]
+struct SwaChunkPrepArgs {
+    t: u32, p0: u32, layer_slot: u32, max_batch: u32,
+    seq_cs_off: u32, q_off: u32, k_off: u32, v_off: u32,
+    r_off: u32, qp_off: u32, rp_off: u32, kconv_t_w: u32,
+    vconv_t_w: u32, qclip_w: u32, relclip_w: u32, pad0: u32,
+}
+
+#[repr(C)] #[derive(Clone, Copy, Default)]
+struct TieredSwaChunkAttnArgs {
+    t: u32, p0: u32, old_inner_p0: u32, inner_cap: u32,
+    outer_cap: u32, slot_idx: u32, inner_fp16: u32, inner_pt_off: u32,
+    outer_pt_off: u32, qp_off: u32, rp_off: u32, sink_off: u32,
+    gate_off: u32, out_off: u32, relbias_w: u32, pad0: u32,
+}
+
+#[repr(C)] #[derive(Clone, Copy, Default)]
+struct SwaCommitChunkArgs {
+    t: u32, p0: u32, inner_cap: u32, slot_idx: u32,
+    inner_fp16: u32, inner_pt_off: u32, pad0: u32, pad1: u32,
+}
+
 #[repr(C)] #[derive(Clone, Copy)]
 struct KvPageSummaryHost {
     k_min: [i8; 128],
@@ -2116,10 +2138,10 @@ struct SparseMetaLayout {
 }
 
 impl SparseMetaLayout {
-    fn new(max_batch: usize, max_pages: usize, page_toks: usize) -> Self {
+    fn new(max_batch: usize, max_pages: usize, page_toks: usize, chunk_cap: usize) -> Self {
         let mut o = 0u32;
         let mut take = |n: usize| { let r = o; o += (n.div_ceil(16) * 16) as u32; r };
-        let local_pt_stride = (EXT / page_toks + 2).max(4);
+        let local_pt_stride = ((EXT + chunk_cap) / page_toks + 3).max(4);
         let far_pt_stride = max_pages.max(1);
         let seq_pos = take(max_batch);
         let seq_suf = take(max_batch);
@@ -2194,6 +2216,7 @@ pub struct Kv256kPool<'a> {
     chunk_swa_comp: Option<Buf>,   // 1-slot SWA scratch for streaming chunked prefill
     chunk_swa_scales: Option<Buf>,
     chunk_swa_cap: usize,
+    chunk_swa_kv: Option<Buf>,     // 1-layer FP16 SWA scratch ([2][NKV][chunk_cap][HD], 1 MiB @ 256) for Tiered-SWA chunked append
     pub kv_sum: Buf,       // [N_FULL][sum_pool_cap][NKV] KvPageWht2 (416 B) or KvPageSummary (528 B)
     pub swa_pool: Buf,     // legacy SWA pool (16 B dummy when use_tiered_swa == true)
     pub swa_cap: usize,
@@ -2269,7 +2292,7 @@ impl<'a> Kv256kPool<'a> {
         unsafe { std::ptr::write_bytes(k_dc_mean.contents().as_ptr() as *mut u8, 0, k_dc_mean.length()); }
 
         // 3. Metadata & Sparse AUX buffers
-        let ml = SparseMetaLayout::new(cfg.max_active_batch, max_pages, cfg.page_toks);
+        let ml = SparseMetaLayout::new(cfg.max_active_batch, max_pages, cfg.page_toks, cfg.chunk_cap);
         let al = SparseAuxLayout::new(cfg.max_active_batch, max_pages, cfg.top_k_pages);
         let meta = [
             mem.try_alloc(&eng.gpu, ml.total_u32 * 4, "kv256k_meta0")?,
@@ -2324,13 +2347,14 @@ impl<'a> Kv256kPool<'a> {
 
         // 5b. Dedicated 1-slot SWA scratch for streaming chunked prefill (only if chunk_cap > 0)
         let pair_payload = kv_pair_payload_bytes(cfg.kv_bits);
-        let (chunk_swa_comp, chunk_swa_scales, chunk_swa_cap) = if cfg.chunk_cap > 0 {
+        let (chunk_swa_comp, chunk_swa_scales, chunk_swa_cap, chunk_swa_kv) = if cfg.chunk_cap > 0 {
             let ccap = (EXT + cfg.chunk_cap).div_ceil(cfg.page_toks) + 2;
             let c_comp = mem.try_alloc(&eng.gpu, ccap * NKV * cfg.page_toks * pair_payload, "kv256k_chunk_swa_comp")?;
             let c_sc = mem.try_alloc(&eng.gpu, ccap * 2 * NKV * cfg.page_toks * 2, "kv256k_chunk_swa_scales")?;
-            (Some(c_comp), Some(c_sc), ccap)
+            let c_kv = mem.try_alloc(&eng.gpu, 2 * NKV * cfg.chunk_cap * HD * 2, "kv256k_chunk_swa_kv")?;
+            (Some(c_comp), Some(c_sc), ccap, Some(c_kv))
         } else {
-            (None, None, 0)
+            (None, None, 0, None)
         };
 
         // 6. Hot RAM compressed Full KV pool (KV4 / K3V2 / KV3 / KV2), capped strictly to remaining budget!
@@ -2382,6 +2406,7 @@ impl<'a> Kv256kPool<'a> {
             chunk_swa_comp,
             chunk_swa_scales,
             chunk_swa_cap,
+            chunk_swa_kv,
             kv_sum,
             swa_pool,
             swa_cap,
@@ -3435,6 +3460,410 @@ impl<'a> Kv256kPool<'a> {
             for pid in pinned_now { self.lru.unpin(pid); }
             sess.pos = new_pos;
             p0 += t;
+        }
+        Ok(t0.elapsed())
+    }
+
+    /// High-throughput batched chunked prefill append (`t <= 256`) at ANY arbitrary `sess.pos >= 0`
+    /// with full `Tiered-SWA` inner/outer synchronization, `WHT-K3V2` + `K_DC_MEAN`, `WHT-2bit-sketch`
+    /// page summarization, and FP16 `cs_pool_hcs` continuity (~35-50x faster than `step_one()` loops!).
+    pub fn prefill_append_chunked(
+        &mut self,
+        sess: &mut Kv256kSession,
+        toks: &[u32],
+        chunk_size: usize,
+    ) -> Result<Duration, String> {
+        if toks.is_empty() {
+            return Ok(Duration::ZERO);
+        }
+        if self.cfg.chunk_cap < 64 || !self.cfg.use_tiered_swa {
+            let t0 = Instant::now();
+            for &tk in toks {
+                self.step_one(sess, tk, false)?;
+            }
+            return Ok(t0.elapsed());
+        }
+        if sess.pos + toks.len() + 2 >= self.cfg.max_ctx {
+            return Err(format!(
+                "prefill_append_chunked ({} + {} tok) exceeds max_ctx {}",
+                sess.pos, toks.len(), self.cfg.max_ctx
+            ));
+        }
+
+        let t0 = Instant::now();
+        // Strictly <= 256 so every new chunk token lands in `swa_inner` (9 blocks = 288 tok)
+        // and only pre-existing complete inner blocks graduate to `swa_outer` after attention!
+        let chunk_lim = chunk_size.clamp(64, self.cfg.chunk_cap.min(256));
+        if sess.cs_slot.is_none() {
+            let cs = self.alloc_cs()?;
+            sess.cs_slot = Some(cs);
+            self.zero_cs_slots(&[cs]);
+        }
+        let cs_slot = sess.cs_slot.unwrap();
+        let pt = self.cfg.page_toks;
+
+        // Ensure all Tiered-SWA inner & outer ring pages exist for this session.
+        while sess.swa_pages.len() < SWA_INNER_BLKS {
+            let p = self.alloc_swa_page()?;
+            sess.swa_pages.push(p);
+        }
+        while sess.swa_outer_pages.len() < SWA_OUTER_BLKS {
+            let p = self.alloc_swa_outer_page()?;
+            sess.swa_outer_pages.push(p);
+        }
+
+        // Defensively summarize any completed full page before entering the chunk loop.
+        let already_done = sess.pos / pt;
+        for lp in 0..already_done {
+            if lp < sess.sum_pages.len() && sess.sum_pages[lp] == u32::MAX {
+                if let Some(hot_pid) = self.lru.peek_hot(sess.logical_pages[lp]) {
+                    let spid = self.alloc_sum_page()?;
+                    self.summarize_completed_page(hot_pid, spid, pt as u32);
+                    sess.sum_pages[lp] = spid;
+                }
+            }
+        }
+
+        let mut off = 0usize;
+        while off < toks.len() {
+            let t = (toks.len() - off).min(chunk_lim);
+            let cur_p0 = sess.pos;
+            let new_pos = cur_p0 + t;
+
+            let tp = self.toks[0].contents().as_ptr() as *mut i32;
+            for (i, &tk) in toks[off..off + t].iter().enumerate() {
+                unsafe { *tp.add(i) = tk as i32; }
+            }
+
+            let first_page = cur_p0 / pt;
+            let last_page = (new_pos - 1) / pt;
+            let local_p0_page = if cur_p0 + 1 > EXT { (cur_p0 + 1 - EXT) / pt } else { 0 };
+            let mut pinned_now: Vec<u32> = Vec::new();
+            let mut chunk_pids: Vec<u32> = Vec::new();
+            let mut local_pids: Vec<u32> = Vec::new();
+
+            for lp in local_p0_page..=last_page {
+                while sess.logical_pages.len() <= lp {
+                    let lid = self.radix.alloc_logical_id();
+                    sess.logical_pages.push(lid);
+                    sess.sum_pages.push(u32::MAX);
+                    sess.page_hashes.push(None);
+                }
+                let lid = sess.logical_pages[lp];
+                let pid = self.lru.alloc_for_logical(lid, true, true, &mut self.cold, &self.kv_comp, &self.kv_scales)?;
+                pinned_now.push(pid);
+                local_pids.push(pid);
+                if lp >= first_page {
+                    chunk_pids.push(pid);
+                }
+            }
+
+            // Compute Tiered-SWA old inner boundary and exact graduation list [old_inner_start .. new_inner_start)
+            let old_inner_start = if cur_p0 == 0 {
+                0usize
+            } else {
+                ((cur_p0 - 1) / KV_BLK).saturating_sub(SWA_INNER_BLKS - 1)
+            };
+            let old_inner_p0 = old_inner_start * KV_BLK;
+            let new_last_blk = (new_pos - 1) / KV_BLK;
+            let new_inner_start = new_last_blk.saturating_sub(SWA_INNER_BLKS - 1);
+            let mut grad_jobs: Vec<(u32, u32)> = Vec::new();
+            if cur_p0 > 0 && new_inner_start > old_inner_start {
+                for b in old_inner_start..new_inner_start {
+                    grad_jobs.push((
+                        sess.swa_pages[b % SWA_INNER_BLKS],
+                        sess.swa_outer_pages[b % SWA_OUTER_BLKS],
+                    ));
+                }
+            }
+            debug_assert!(grad_jobs.len() <= 16);
+
+            let mp = self.meta[0].contents().as_ptr() as *mut u32;
+            unsafe {
+                *mp.add(self.ml.seq_cs as usize) = cs_slot;
+                for (i, &pid) in chunk_pids.iter().enumerate() {
+                    *mp.add(self.ml.write_pid as usize + i) = pid;
+                }
+                for (i, &pid) in local_pids.iter().enumerate() {
+                    *mp.add(self.ml.local_pt as usize + i) = pid;
+                }
+                for lp in 0..local_p0_page {
+                    *mp.add(self.ml.sum_pt as usize + lp) = sess.sum_pages[lp];
+                }
+                for (k, &pid) in sess.swa_pages.iter().take(SWA_INNER_BLKS).enumerate() {
+                    *mp.add(self.ml.swa_inner_pt as usize + k) = pid;
+                }
+                for (k, &pid) in sess.swa_outer_pages.iter().take(SWA_OUTER_BLKS).enumerate() {
+                    *mp.add(self.ml.swa_outer_pt as usize + k) = pid;
+                }
+                for (j, &(sp, dp)) in grad_jobs.iter().enumerate() {
+                    *mp.add(self.ml.swa_grad_src as usize + j) = sp;
+                    *mp.add(self.ml.swa_grad_dst as usize + j) = dp;
+                }
+            }
+
+            let cb = self.eng.gpu.cmd();
+            let e = Enc::new(&cb);
+            e.buf(&self.eng.w, 0, 0);
+            e.buf(&self.eng.pb, 0, 1);
+            e.buf(&self.act, 0, 2);
+            e.buf(&self.cs_pool_hcs, 0, 4);
+            e.buf(&self.toks[0], 0, 6);
+            e.buf(&self.meta[0], 0, 7);
+            e.buf(&self.k_dc_mean, 0, 10);
+            e.buf(
+                self.chunk_swa_kv
+                    .as_ref()
+                    .expect("chunk_swa_kv must be allocated when chunk_cap > 0"),
+                0,
+                11,
+            );
+
+            let da = &self.da;
+            let ea = EmbedArgs {
+                emb_lo: self.eng.tok_embd.off as u32,
+                emb_hi: (self.eng.tok_embd.off >> 32) as u32,
+                row_bytes: self.eng.tok_embd.row_bytes,
+                norm_off: self.eng.tok_norm,
+                out0: da.vec(0),
+                out1: da.vec(0),
+                tok_index: 0,
+                eps: self.eng.eps,
+            };
+            enc_go(self.eng, &e, 0, C_EMBED, "k_embed", &ea, (t, 1, 1), 256);
+
+            let mut va = VecAlloc { next: 1, n: B_NVEC };
+            let mut blocks: Vec<usize> = Vec::new();
+            let mut cur = 0usize;
+
+            let run_chunk_layer = |slot: usize, ip: usize, cur_v: usize, blks: &mut Vec<usize>, msg: Option<(usize, usize)>, va: &mut VecAlloc, pinned: &[usize]| -> usize {
+                let l = &self.eng.layers[ip];
+                let ctl = msg.map(|_| &self.eng.loops[ip - LOOP_START]);
+                let es = E as u32;
+
+                // 1. Attention input mix
+                let norms: [i32; 3] = if l.swa { [l.attn_norm; 3] } else { [l.q_inp_norm, l.k_inp_norm, l.v_inp_norm] };
+                let mut st: Vec<u32> = blks.iter().map(|&v| da.vec(v)).collect();
+                st.push(da.vec(cur_v));
+                let nq = if l.attn_res_query >= 0 { l.n_attn_q } else { 1 };
+                if let Some(lw) = ctl {
+                    let (b0, b1) = msg.unwrap();
+                    let mut ja = self.eng.mix_job_off(&st, l.attn_res_query, nq, &da.inp[..nq as usize], &[], es);
+                    let mut jm = self.eng.mix_job_off(&[da.vec(b0), da.vec(b1)], lw.msg_query as i32, 4, &da.msg, &[], es);
+                    if l.swa { ja.hcopy[0] = [da.cath[0] as i32, da.cath[1] as i32, da.cath[2] as i32]; }
+                    else { for j in 0..3 { ja.hcopy[j][0] = da.cath[j] as i32; } }
+                    for j in 0..4 { jm.hcopy[j][0] = (da.cath[j] + (E / 2) as u32) as i32; }
+                    enc_mix_b(self.eng, &e, 0, C_MIXA, &[ja, jm], t);
+                    let jobs: Vec<(usize, u32, u32, u32)> = (0..3).map(|j| (j, if l.swa { da.inp[0] } else { da.inp[j] }, da.msg[j], norms[j] as u32)).collect();
+                    enc_ctrl_b(self.eng, &e, 0, da, lw, &jobs, t, &[da.xh[0], da.xh[1], da.xh[2]]);
+                } else {
+                    let nn: Vec<i32> = if l.swa { vec![l.attn_norm] } else { norms.to_vec() };
+                    let mut ja = self.eng.mix_job_off(&st, l.attn_res_query, nq, &da.inp[..nq as usize], &nn, es);
+                    for q in 0..nq as usize { ja.hout[q] = da.xh[q] as i32; }
+                    ja.nof32 = 0xF;
+                    enc_mix_b(self.eng, &e, 0, C_MIXA, &[ja], t);
+                }
+
+                // 2. QKV projections (tensor-core fp16 GEMMs)
+                let xi: [usize; 3] = if ctl.is_some() || !l.swa { [0, 1, 2] } else { [0, 0, 0] };
+                let mut hs = vec![
+                    Engine::hseg(&l.wq, da.xh[xi[0]], da.q),
+                    Engine::hseg(&l.wgate, da.xh[xi[0]], da.gate),
+                    Engine::hseg(&l.wrel, da.xh[xi[0]], da.rel),
+                    Engine::hseg(&l.wsink, da.xh[xi[0]], da.sink),
+                    Engine::hseg(&l.wk, da.xh[xi[1]], da.k),
+                    Engine::hseg(&l.wv, da.xh[xi[2]], da.v),
+                ];
+                hs[0].hout = 1; hs[1].hout = 1;
+                if let (Some(kp), Some(vp)) = (&l.kconvp, &l.vconvp) {
+                    hs.push(Engine::hseg(kp, da.xh[xi[1]], da.kdyn));
+                    hs.push(Engine::hseg(vp, da.xh[xi[2]], da.vdyn));
+                }
+                enc_gemm_h(self.eng, &e, 0, C_QKV, &hs, t);
+
+                // 3. Attention (Tiered-SWA exact append on SWA layers; WHT-K3V2 + centroids on Full layers)
+                let (is_swa, slot_idx) = self.eng.slot_kind[slot];
+                if is_swa {
+                    let sp = SwaChunkPrepArgs {
+                        t: t as u32, p0: cur_p0 as u32, layer_slot: slot as u32,
+                        max_batch: self.cfg.max_active_batch as u32,
+                        seq_cs_off: self.ml.seq_cs, q_off: da.q, k_off: da.k, v_off: da.v,
+                        r_off: da.rel, qp_off: da.qp, rp_off: da.rp,
+                        kconv_t_w: l.k_conv_t, vconv_t_w: l.v_conv_t, qclip_w: l.q_clip, relclip_w: l.rel_clip,
+                        pad0: 0,
+                    };
+                    enc_go(self.eng, &e, 0, C_KVPREP, "k_swa_prep_chunk", &sp, (t, NKV, 1), 128);
+                    for br in 0..2u32 {
+                        let su = StateHcsArgs {
+                            x_off: if br == 0 { da.k } else { da.v }, ldx: (NKV * HD) as u32,
+                            layer_slot: slot as u32, branch: br, max_batch: self.cfg.max_active_batch as u32,
+                            nch: (NKV * HD) as u32, seq_cs: cs_slot, p0: cur_p0 as u32, t: t as u32,
+                            pad0: 0, pad1: 0, pad2: 0,
+                        };
+                        enc_go(self.eng, &e, 0, C_KVPREP, "k_state_upd_hcs", &su, (NKV * HD / 256, 1, 1), 256);
+                    }
+                    e.buf(&self.swa_inner, 0, 3);
+                    e.buf(&self.swa_inner_sc, 0, 6);
+                    e.buf(&self.swa_outer_comp, 0, 8);
+                    e.buf(&self.swa_outer_sc, 0, 9);
+                    let ta = TieredSwaChunkAttnArgs {
+                        t: t as u32, p0: cur_p0 as u32, old_inner_p0: old_inner_p0 as u32,
+                        inner_cap: self.swa_inner_cap as u32, outer_cap: self.swa_outer_cap as u32,
+                        slot_idx: slot_idx as u32, inner_fp16: self.cfg.swa_inner_fp16 as u32,
+                        inner_pt_off: self.ml.swa_inner_pt, outer_pt_off: self.ml.swa_outer_pt,
+                        qp_off: da.qp, rp_off: da.rp, sink_off: da.sink,
+                        gate_off: da.gate, out_off: da.agh, relbias_w: l.rel_bias, pad0: 0,
+                    };
+                    enc_go(self.eng, &e, 0, C_ATTN, "k_attn_swa_tiered_chunk", &ta, (NKV, t, 1), 128);
+                    if !grad_jobs.is_empty() {
+                        let ga = SwaCompressArgs {
+                            n_jobs: grad_jobs.len() as u32,
+                            inner_cap: self.swa_inner_cap as u32,
+                            outer_cap: self.swa_outer_cap as u32,
+                            slot_start: slot_idx as u32,
+                            inner_fp16: self.cfg.swa_inner_fp16 as u32,
+                            src_pid_off: self.ml.swa_grad_src,
+                            dst_pid_off: self.ml.swa_grad_dst,
+                            pad0: 0,
+                        };
+                        enc_go(self.eng, &e, 0, C_KVPREP, "k_swa_compress_outer", &ga, (grad_jobs.len() * KV_BLK, NKV, 1), 128);
+                    }
+                    let cm = SwaCommitChunkArgs {
+                        t: t as u32, p0: cur_p0 as u32, inner_cap: self.swa_inner_cap as u32,
+                        slot_idx: slot_idx as u32, inner_fp16: self.cfg.swa_inner_fp16 as u32,
+                        inner_pt_off: self.ml.swa_inner_pt, pad0: 0, pad1: 0,
+                    };
+                    enc_go(self.eng, &e, 0, C_KVPREP, "k_swa_commit_chunk", &cm, (t, NKV, 1), 128);
+                } else {
+                    let dc_on = self.use_dc_mean;
+                    let sink_for_attn = if dc_on { da.eff_sink } else { da.sink };
+                    e.buf(&self.kv_comp, 0, 3);
+                    e.buf(&self.kv_scales, 0, 6);
+                    e.buf(&self.kv_sum, 0, 8);
+                    let kw = WhtKvPrepArgs {
+                        b: t as u32, pool_cap: self.lru.hot_cap as u32, slot_idx: slot_idx as u32,
+                        page_toks: pt as u32, kv_bits: self.cfg.kv_bits,
+                        layer_slot: slot as u32, max_batch: self.cfg.max_active_batch as u32,
+                        is_prefill: 1, p0: cur_p0 as u32,
+                        seq_pos_off: 0, seq_cs_off: self.ml.seq_cs, write_pid_off: self.ml.write_pid,
+                        q_off: da.q, k_off: da.k, v_off: da.v, r_off: da.rel,
+                        kdyn_off: da.kdyn as i32, vdyn_off: da.vdyn as i32,
+                        kconv_t_w: l.k_conv_t, vconv_t_w: l.v_conv_t, qclip_w: l.q_clip, relclip_w: l.rel_clip,
+                        log_alpha: self.eng.log_alpha, log_floor: self.eng.log_floor,
+                        qp_off: da.qp, rp_off: da.rp, sink_off: da.sink, eff_sink_off: sink_for_attn,
+                        use_dc_mean: dc_on as u32, pad0: 0, pad1: 0, pad2: 0,
+                    };
+                    enc_go(self.eng, &e, 0, C_KVPREP, "k_kvprep_wht_write", &kw, (t, NKV, 1), 128);
+                    for br in 0..2u32 {
+                        let su = StateHcsArgs {
+                            x_off: if br == 0 { da.k } else { da.v }, ldx: (NKV * HD) as u32,
+                            layer_slot: slot as u32, branch: br, max_batch: self.cfg.max_active_batch as u32,
+                            nch: (NKV * HD) as u32, seq_cs: cs_slot, p0: cur_p0 as u32, t: t as u32,
+                            pad0: 0, pad1: 0, pad2: 0,
+                        };
+                        enc_go(self.eng, &e, 0, C_KVPREP, "k_state_upd_hcs", &su, (NKV * HD / 256, 1, 1), 256);
+                    }
+                    let ca = ChunkWhtAttnArgs {
+                        t: t as u32, p0: cur_p0 as u32, pool_cap: self.lru.hot_cap as u32,
+                        slot_idx: slot_idx as u32, layer_slot: slot as u32,
+                        page_toks: pt as u32, kv_bits: self.cfg.kv_bits,
+                        sum_pool_cap: self.cfg.sum_pool_pages as u32, use_sum_pt: 1,
+                        qp_off: da.qp, rp_off: da.rp, sink_off: sink_for_attn, gate_off: da.gate,
+                        out_off: da.agh, relbias_w: l.rel_bias,
+                        local_p0_page: local_p0_page as u32,
+                        local_pt_off: self.ml.local_pt, sum_pt_off: self.ml.sum_pt, sum_base: 0,
+                        use_centroids: 1,
+                        sum_format: self.cfg.use_wht2_sketch as u32, pad0: 0, pad1: 0, pad2: 0,
+                    };
+                    enc_go(self.eng, &e, 0, C_ATTN, "k_attn_wht_chunk", &ca, (NKV, t, 1), 128);
+                }
+
+                // 4. wo + FP16 CS chunk post-conv + ring state update
+                enc_gemm_h(self.eng, &e, 0, C_WO, &[Engine::hseg(&l.wo, da.agh, da.wo_y)], t);
+                let block_start = ip % BLOCK == 0;
+                let mut live: Vec<usize> = blks.clone(); live.push(cur_v); live.extend_from_slice(pinned);
+                let mid = va.alloc(&live);
+                let cv = ChunkConvHcsArgs {
+                    y_off: da.wo_y, ldy: es, res_off: da.vec(cur_v), out_off: da.vec(mid),
+                    layer_slot: slot as u32, branch: 2, max_batch: self.cfg.max_active_batch as u32,
+                    convw_t_off: l.attn_post_conv_t, has_res: (!block_start) as u32,
+                    seq_cs: cs_slot, p0: cur_p0 as u32, t: t as u32,
+                };
+                enc_go(self.eng, &e, 0, C_WOPOST, "k_postconv_hcs_chunk", &cv, (E / 256, t, 1), 256);
+                let su = StateHcsArgs {
+                    x_off: da.wo_y, ldx: es, layer_slot: slot as u32, branch: 2,
+                    max_batch: self.cfg.max_active_batch as u32, nch: es, seq_cs: cs_slot, p0: cur_p0 as u32, t: t as u32,
+                    pad0: 0, pad1: 0, pad2: 0,
+                };
+                enc_go(self.eng, &e, 0, C_WOPOST, "k_state_upd_hcs", &su, (E / 256, 1, 1), 256);
+                if block_start { blks.push(cur_v); }
+
+                // 5. FFN input + 6-class MoE + combine + FP16 CS chunk post-conv
+                let mut st: Vec<u32> = blks.iter().map(|&v| da.vec(v)).collect(); st.push(da.vec(mid));
+                if let Some(lw) = ctl {
+                    let mut jf = self.eng.mix_job_off(&st, l.ffn_res_query as i32, 1, &[da.fin], &[], es);
+                    jf.hcopy[0][0] = da.cath[3] as i32;
+                    enc_mix_b(self.eng, &e, 0, C_MIXF, &[jf], t);
+                    enc_ctrl_b(self.eng, &e, 0, da, lw, &[(3, da.fin, da.msg[3], l.ffn_norm)], t, &[da.fh]);
+                } else {
+                    let mut jf = self.eng.mix_job_off(&st, l.ffn_res_query as i32, 1, &[da.fin], &[l.ffn_norm as i32], es);
+                    jf.hout[0] = da.fh as i32; jf.nof32 = 1;
+                    enc_mix_b(self.eng, &e, 0, C_MIXF, &[jf], t);
+                }
+                enc_moe_dispatch(self.eng, &e, &self.act, 0, da, l, t, self.moe_cfg);
+                #[repr(C)] #[derive(Clone, Copy)]
+                struct MoeCombArgsLocal { yd_off: u32, inv_off: u32, sel_off: u32, out_off: u32 }
+                let mca = MoeCombArgsLocal { yd_off: da.yd, inv_off: da.inv, sel_off: da.sel, out_off: da.ffn_y };
+                enc_go(self.eng, &e, 0, C_COMB2, "k_moe_comb_h", &mca, (t, E.div_ceil(1024), 1), 256);
+                let mut live: Vec<usize> = blks.clone(); live.push(mid); live.extend_from_slice(pinned);
+                let out = va.alloc(&live);
+                let cv = ChunkConvHcsArgs {
+                    y_off: da.ffn_y, ldy: es, res_off: da.vec(mid), out_off: da.vec(out),
+                    layer_slot: slot as u32, branch: 3, max_batch: self.cfg.max_active_batch as u32,
+                    convw_t_off: l.ffn_post_conv_t, has_res: 1, seq_cs: cs_slot, p0: cur_p0 as u32, t: t as u32,
+                };
+                enc_go(self.eng, &e, 0, C_FFNPOST, "k_postconv_hcs_chunk", &cv, (E / 256, t, 1), 256);
+                let su = StateHcsArgs {
+                    x_off: da.ffn_y, ldx: es, layer_slot: slot as u32, branch: 3,
+                    max_batch: self.cfg.max_active_batch as u32, nch: es, seq_cs: cs_slot, p0: cur_p0 as u32, t: t as u32,
+                    pad0: 0, pad1: 0, pad2: 0,
+                };
+                enc_go(self.eng, &e, 0, C_FFNPOST, "k_state_upd_hcs", &su, (E / 256, 1, 1), 256);
+                out
+            };
+
+            for ip in 0..LOOP_START { cur = run_chunk_layer(ip, ip, cur, &mut blocks, None, &mut va, &[]); }
+            let prelude = cur;
+            let prelude_blocks = blocks.clone();
+            let mut bank = (0usize, 0usize);
+            for pass in 0..N_PASS {
+                if pass > 0 { cur = prelude; blocks = prelude_blocks.clone(); }
+                let msg = if pass > 0 { Some(bank) } else { None };
+                let pinned: Vec<usize> = { let mut p = vec![prelude]; if pass > 0 { p.push(bank.0); p.push(bank.1); } p };
+                for ip in LOOP_START..LOOP_END {
+                    cur = run_chunk_layer(slot_of(pass, ip), ip, cur, &mut blocks, msg, &mut va, &pinned);
+                }
+                bank = (blocks[prelude_blocks.len() + 1], cur);
+            }
+            for ip in LOOP_END..N_PHYS { cur = run_chunk_layer(ip, ip, cur, &mut blocks, None, &mut va, &[]); }
+            e.end();
+            cb.commit();
+            cb.waitUntilCompleted();
+
+            // Summarize any full pages completed by this chunk
+            let completed_end = new_pos / pt;
+            for lp in first_page..completed_end {
+                if sess.sum_pages[lp] == u32::MAX {
+                    let spid = self.alloc_sum_page()?;
+                    let hot_pid = self.lru.peek_hot(sess.logical_pages[lp]).unwrap();
+                    self.summarize_completed_page(hot_pid, spid, pt as u32);
+                    sess.sum_pages[lp] = spid;
+                }
+            }
+
+            for pid in pinned_now { self.lru.unpin(pid); }
+            sess.pos = new_pos;
+            off += t;
         }
         Ok(t0.elapsed())
     }
@@ -4836,7 +5265,7 @@ pub fn run_bench_256k(
 
         let est_base = |sum_p: usize, hot_p: usize| -> usize {
             let da = OptArena::new(b_len, eng.n_vocab, eng.output.rows as usize, false);
-            let ml = SparseMetaLayout::new(b_len, n_pages_256k, page_toks);
+            let ml = SparseMetaLayout::new(b_len, n_pages_256k, page_toks, 0);
             let al = SparseAuxLayout::new(b_len, n_pages_256k, top_k_pages);
             da.end as usize * 4
                 + b_len * cs_per_inst
@@ -5681,10 +6110,21 @@ mod tests {
     fn test_b1_mv_opt_arena_layout_and_structs() {
         assert_eq!(std::mem::size_of::<MoeDownHcsArgs>(), 64);
         assert_eq!(std::mem::size_of::<WoPostArgs>(), 64);
+        assert_eq!(std::mem::size_of::<SwaChunkPrepArgs>(), 64);
+        assert_eq!(std::mem::size_of::<TieredSwaChunkAttnArgs>(), 64);
+        assert_eq!(std::mem::size_of::<SwaCommitChunkArgs>(), 32);
         assert!(KERNELS.contains(&"k_wo_mv_hcs"));
         assert!(KERNELS.contains(&"k_moe_down_hcs"));
+        assert!(KERNELS.contains(&"k_swa_prep_chunk"));
+        assert!(KERNELS.contains(&"k_attn_swa_tiered_chunk"));
+        assert!(KERNELS.contains(&"k_swa_commit_chunk"));
 
-        for &cap in &[1usize, 4, 16, 64] {
+        let ml256 = SparseMetaLayout::new(1, 2048, 128, 256);
+        assert!(ml256.local_pt_stride >= 13);
+        let ml64 = SparseMetaLayout::new(1, 1024, 64, 256);
+        assert!(ml64.local_pt_stride >= 23);
+
+        for &cap in &[1usize, 4, 16, 64, 256] {
             for &need_chunk_y in &[false, true] {
                 let d = OptArena::new(cap, 200_000, 201_024, need_chunk_y);
                 let mut persist: Vec<(&str, u32, usize)> = vec![("vec0", d.vec0, B_NVEC * cap * E)];
