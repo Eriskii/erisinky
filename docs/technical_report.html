@@ -719,6 +719,37 @@ svg .axis-stroke { stroke: var(--border-hi); stroke-width: 1.2; }
   color: var(--text-dim);
 }
 
+/* Visual Explainers */
+.explainer-banner {
+  margin-top: 12px;
+  padding: 11px 14px;
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--cyan);
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.explainer-banner strong { color: var(--text); }
+.jump-link {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--cyan);
+  text-decoration: none;
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: var(--cyan-soft);
+  border: 1px solid color-mix(in srgb, var(--cyan) 35%, transparent);
+  white-space: nowrap;
+}
+.jump-link:hover { filter: brightness(1.12); }
+
 footer {
   margin-top: 20px;
   padding-top: 18px;
@@ -788,6 +819,7 @@ footer {
     <div class="toc-label">Chronology</div>
     <ul class="toc-list">
       <li><a class="toc-link active" href="#overview"><span class="toc-num">TOP</span><span>Headline Results</span></a></li>
+      <li><a class="toc-link" href="#arch-map"><span class="toc-num">MAP</span><span>3 Scenarios, 1 Format</span></a></li>
       <li><a class="toc-link" href="#act0"><span class="toc-num">00</span><span>Hardware &amp; 256K Pivot</span></a></li>
       <li><a class="toc-link" href="#act1"><span class="toc-num">01</span><span>256K Compression Probes</span></a></li>
       <li><a class="toc-link" href="#act2"><span class="toc-num">02</span><span>Disk Expert Offloading</span></a></li>
@@ -795,6 +827,7 @@ footer {
       <li><a class="toc-link" href="#act4"><span class="toc-num">04</span><span>TokenDance + KVCOMM</span></a></li>
       <li><a class="toc-link" href="#act5"><span class="toc-num">05</span><span>Live 256K Engine v1→v2</span></a></li>
       <li><a class="toc-link" href="#act6"><span class="toc-num">06</span><span>.ikv &amp; 50K Agent Demo</span></a></li>
+      <li><a class="toc-link" href="#act7"><span class="toc-num">07</span><span>25-Task Benchmark</span></a></li>
       <li><a class="toc-link" href="#epilogue"><span class="toc-num">END</span><span>Scorecard &amp; Next</span></a></li>
     </ul>
     <div class="toc-meta">
@@ -837,6 +870,31 @@ footer {
           <div class="kpi-val">992 tok/s</div>
           <div class="kpi-desc"><strong>Bit-exact (0.00e0)</strong> layer-pipelined macro-batching (<code>B_macro=2048</code>) with 7.83 GiB offloaded; <strong>849 tok/s</strong> with all 15.2 GiB of experts offloaded.</div>
         </div>
+      </div>
+    </section>
+
+    <!-- VISUAL EXPLAINER #4: Three Scenarios, One Compressed Page Format -->
+    <section id="arch-map" class="act">
+      <div class="doodad">
+        <div class="card-head">
+          <div>
+            <h3 class="card-title">Architecture Map · Three Scenarios, One Compressed Page Format</h3>
+          </div>
+          <span class="doodad-badge">Visual Map · 1 Shared Primitive</span>
+        </div>
+        <p class="card-note">
+          Single-agent 256K sessions, 100-agent swarms, and instant <code>.ikv</code> file reads aren't three separate systems. They all radiate from the exact same Zero-RoPE compressed page format: <strong><code>DC_mean</code> + <code>WHT-K3V2</code> + <code>WHT-2bit-sketch</code></strong>.
+        </p>
+        <div class="ctrl-row">
+          <div class="seg-group" id="exp4Focus">
+            <button class="seg-btn active" data-focus="all" type="button">All 3 Scenarios</button>
+            <button class="seg-btn" data-focus="single" type="button">1. Single Agent (109 MiB)</button>
+            <button class="seg-btn" data-focus="swarm" type="button">2. Multi-Agent Swarm (96–128+)</button>
+            <button class="seg-btn" data-focus="ikv" type="button">3. Pre-Processed .ikv (38.2×)</button>
+          </div>
+        </div>
+        <div id="explainer4Map" class="svg-wrap"></div>
+        <div id="explainer4Banner" class="explainer-banner"></div>
       </div>
     </section>
 
@@ -946,6 +1004,29 @@ footer {
         </div>
         <div id="doodad1Heatmap" class="svg-wrap"></div>
         <div class="metric-strip" id="doodad1Stats"></div>
+      </div>
+
+      <!-- VISUAL EXPLAINER #1: Why Naive Quantization Dies & How DC-Mean + Hadamard Fixes It -->
+      <div class="doodad">
+        <div class="card-head">
+          <div>
+            <h3 class="card-title">Visual Explainer · Why Naive Quantization Dies &amp; How DC-Mean + Hadamard Fixes It</h3>
+          </div>
+          <span class="doodad-badge">Interactive · 3-Stage Walkthrough</span>
+        </div>
+        <p class="card-note">
+          Raw attention keys sit on a huge shared offset (<code>μ</code>) plus two violent outlier spikes that stretch a naive 3-bit grid until normal channels vanish into <code>0</code>. Step through the two cheap linear transforms that turn spiky keys into a crisp bell curve before quantization even starts.
+        </p>
+        <div class="ctrl-row">
+          <div class="seg-group" id="exp1Stages">
+            <button class="seg-btn active" data-stage="1" type="button">Stage 1: Raw Key</button>
+            <button class="seg-btn" data-stage="2" type="button">Stage 2: Subtract Average Key (DC Mean)</button>
+            <button class="seg-btn" data-stage="3" type="button">Stage 3: Hadamard Scramble + Bell-Curve Buckets</button>
+          </div>
+        </div>
+        <div id="explainer1Quant" class="svg-wrap"></div>
+        <div id="explainer1Banner" class="explainer-banner"></div>
+        <div class="metric-strip" id="explainer1Stats"></div>
       </div>
 
       <!-- Rotated Quant & Sparse Retrieval -->
@@ -1159,6 +1240,23 @@ footer {
         </div>
       </div>
 
+      <!-- VISUAL EXPLAINER #2: Why Zero-RoPE Makes Blocks Snap Together Like LEGO Bricks -->
+      <div class="doodad">
+        <div class="card-head">
+          <div>
+            <h3 class="card-title">Visual Explainer · Why Zero-RoPE Makes Blocks Snap Together Like LEGO Bricks</h3>
+          </div>
+          <div class="seg-group" id="exp2Shift">
+            <button class="seg-btn active" data-shift="500" type="button">Move to pos 500</button>
+            <button class="seg-btn" data-shift="50000" type="button">Move to pos 50,000</button>
+          </div>
+        </div>
+        <p class="card-note">
+          Standard RoPE bakes a clock-hand angle into every cached key, so sliding a file behind a new prompt breaks every arrow. Inkling stores pure content keys and only adds relative distance bias live inside the final 1,024 tokens—so compiled blocks drop in anywhere with zero re-rotation.
+        </p>
+        <div id="explainer2Lego" class="svg-wrap"></div>
+      </div>
+
       <div class="grid-2">
         <div class="card">
           <div class="card-head">
@@ -1220,6 +1318,29 @@ footer {
         <p class="act-lead">
           First we fixed the 32-bit 256K crash and built v1 (<code>WHT-KV4/KV2</code> + Quest scoring + NVMe cold spill). Then we upgraded v2 with every single Act 1 winner: <strong><code>WHT-K3V2</code></strong> + <strong>DC key mean subtraction</strong> + <strong><code>WHT-2bit-sketch</code></strong> + <strong>Tiered SWA</strong>. RAM dropped to <strong>109 MiB/instance</strong> while error fell to <strong>KL 0.0181 (16/16)</strong>.
         </p>
+      </div>
+
+      <!-- VISUAL EXPLAINER #3: Library Desk & Index Card Catalog -->
+      <div class="doodad">
+        <div class="card-head">
+          <div>
+            <h3 class="card-title">Visual Explainer · The Library Desk &amp; Index Card Catalog (8,361 MiB → 109 MiB)</h3>
+          </div>
+          <span class="doodad-badge">Interactive · Single-Agent 256K</span>
+        </div>
+        <p class="card-note">
+          Instead of piling 2,048 books onto your desk, the engine shelves compressed pages on NVMe and keeps a tiny <strong>109.0 MiB</strong> working set in RAM. Step through one decode query below to watch how it stays exact across all 262,144 tokens.
+        </p>
+        <div class="ctrl-row">
+          <div class="seg-group" id="exp3Steps">
+            <button class="seg-btn active" data-step="1" type="button">Step 1: Flash 2,048 Index Cards (1.6 ms)</button>
+            <button class="seg-btn" data-step="2" type="button">Step 2: Pull Top-64 Sharp Pages to Desk</button>
+            <button class="seg-btn" data-step="3" type="button">Step 3: Fold 1,984 Summary Cards (+ln 128)</button>
+          </div>
+        </div>
+        <div id="explainer3Library" class="svg-wrap"></div>
+        <div id="explainer3Banner" class="explainer-banner"></div>
+        <div class="metric-strip" id="explainer3Stats"></div>
       </div>
 
       <div class="grid-2">
@@ -1425,19 +1546,134 @@ footer {
           <span class="pill pill-violet">DESIGN.md Ready</span>
         </div>
         <p class="card-note">
-          We tightened <code>inkling-engine/README.md</code> (228 → 98 lines) and pushed <strong>GPL-3.0-or-later</strong> cleanly to <code>origin/main</code> without staging any WIP code. Then we spun <code>.ikv</code> out into sibling crate <strong><code>inkling-ikv</code></strong> (<code>pack / read / inspect / check</code>, 0 warnings, sharing <code>inkling-engine</code> via <code>lib.rs</code>) and drafted the <strong>Shadow KV-LSP</strong> architecture so any unmodified coding harness gets instant reads during compile/test idle time:
+          We tightened <code>inkling-engine/README.md</code> (228 → 98 lines) and pushed <strong>GPL-3.0-or-later</strong> cleanly to <code>origin/main</code> without staging any WIP code. Then we spun <code>.ikv</code> out into sibling crate <strong><code>inkling-ikv</code></strong> (<code>pack / read / inspect / check / task-bench</code>, 0 warnings, sharing <code>inkling-engine</code> via <code>lib.rs</code>) and drafted the <strong>Shadow KV-LSP</strong> architecture so any unmodified coding harness gets instant reads during compile/test idle time:
         </p>
         <div id="chartAct6Shadow" class="svg-wrap"></div>
+      </div>
+    </section>
+
+    <!-- ACT 7: 25-TASK GRADED LONG-CONTEXT BENCHMARK -->
+    <section id="act7" class="act">
+      <div class="act-head">
+        <div class="act-tag">Act 07 · Real Graded Task Benchmark</div>
+        <h2>25-Task Long-Context Scorecard: Exact FP16 vs. Blind <code>.ikv</code> Stitch vs. 9.2% Sparse 256K</h2>
+        <p class="act-lead">
+          KL divergence and single-needle checks are great sanity checks, but real tasks expose real failure modes. So we built <code>inkling-ikv task-bench</code>: 25 deterministic, word-boundary-graded tasks across <strong>5 unmodified Rust source files (34,452 tok)</strong> and <strong>3 synthetic cluster logs (14,656 tok)</strong>—with every single fact hard-asserted <strong>3,870–34,280 tokens past the 1,024-token sliding window</strong> (greedy decode, <code>effort=0</code>, <code>318.9 s</code> total, <code>1.19 GiB</code> final RAM).
+        </p>
+      </div>
+
+      <div class="metric-strip" style="margin-top:0">
+        <div class="metric-mini">
+          <div class="m-lbl">Real 34.4K Codebase (15 Tasks)</div>
+          <div class="m-num" style="color:var(--emerald)">14 / 15 (93.3%)</div>
+          <div class="m-sub">All 3 modes vs 15/15 FP16 · 10/10 Single &amp; Multi-Hop</div>
+        </div>
+        <div class="metric-mini">
+          <div class="m-lbl">34.4K TTFT Speedup (K3V2)</div>
+          <div class="m-num" style="color:var(--cyan)">28.4× (39.8× prefill)</div>
+          <div class="m-sub">19.59 s → 0.69 s · 323 MiB disk (5.86× vs FP16)</div>
+        </div>
+        <div class="metric-mini">
+          <div class="m-lbl">Sparse Far Pages Active</div>
+          <div class="m-num" style="color:var(--violet)">9.2% (48 / 522)</div>
+          <div class="m-sub">90.8% pruned to WHT-4bit centroids — still 14/15!</div>
+        </div>
+        <div class="metric-mini">
+          <div class="m-lbl">Honest Overall (All 25 Tasks)</div>
+          <div class="m-num" style="color:var(--amber)">17 / 25 vs 21 / 25</div>
+          <div class="m-sub">68% vs 84% FP16 · cracks exposed on synthetic logs</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title">Graded Accuracy by Category (4 Modes)</h3>
+            <span class="pill pill-emerald">Codebase: 93.3% Match</span>
+          </div>
+          <p class="card-note">
+            Every task grades only the final answer with strict word-boundary rules. On real source code (15 tasks), <code>IKV-K3V2</code>, <code>Kv256k-Sparse</code> (9.2% active!), and <code>IKV-KV4</code> all tie at <strong>14/15</strong>—and the lone strict miss (<code>C01</code>) got every fact right, just paraphrasing <code>+=</code> as "adding <code>data_off</code>."
+          </p>
+          <div id="chartAct7Cats" class="svg-wrap"></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title">Measured TTFT &amp; Disk Footprint (Both Suites)</h3>
+            <span class="pill pill-cyan">Up to 39.8× Prefill</span>
+          </div>
+          <p class="card-note">
+            Time-to-first-token includes opening all standalone <code>.ikv</code> cartridges, prefilling the system prompt, blind <code>seam=0</code> stitching (skipping SWA on earlier files), and prefilling the question.
+          </p>
+          <div id="chartAct7Ttft" class="svg-wrap"></div>
+        </div>
+      </div>
+
+      <!-- DOODAD 7: Filterable 25-Task Graded Inspector -->
+      <div class="doodad">
+        <div class="card-head">
+          <h3 class="card-title">Interactive Doodad #7 · 25-Task Graded Answer Inspector</h3>
+          <span class="doodad-badge">Interactive · Click Any Task Row to Compare Verbatim Answers</span>
+        </div>
+        <p class="card-note">
+          Filter by category or agreement status, then click any task row to inspect the exact side-by-side greedy responses from <strong>Exact FP16</strong>, <strong>IKV-K3V2 (seam=0)</strong>, and <strong>Kv256k-Sparse (9.2%–12.2% active)</strong>.
+        </p>
+
+        <div class="ctrl-row" style="justify-content:space-between">
+          <div class="seg-group" id="tbCatFilter">
+            <button class="seg-btn active" data-cat="all" type="button">All 25</button>
+            <button class="seg-btn" data-cat="code" type="button">Real Codebase (15)</button>
+            <button class="seg-btn" data-cat="Single-Hop Code" type="button">Single-Hop</button>
+            <button class="seg-btn" data-cat="Multi-Hop Code" type="button">Multi-Hop</button>
+            <button class="seg-btn" data-cat="Code Logic" type="button">Code Logic</button>
+            <button class="seg-btn" data-cat="RULER Multi-Needle" type="button">RULER Multi-Needle</button>
+            <button class="seg-btn" data-cat="RULER Var-Track" type="button">RULER Var-Track</button>
+          </div>
+          <div class="seg-group" id="tbStatFilter">
+            <button class="seg-btn active" data-stat="all" type="button">All Status</button>
+            <button class="seg-btn" data-stat="pass_all" type="button">All 4 Pass (16)</button>
+            <button class="seg-btn" data-stat="diverged" type="button">Diverged vs FP16 (5)</button>
+            <button class="seg-btn" data-stat="fp16_fail" type="button">FP16 Also Failed (4)</button>
+          </div>
+        </div>
+
+        <div class="table-wrap" style="max-height:360px;overflow-y:auto">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Category</th>
+                <th class="num">Fact Distance</th>
+                <th>FP16 Raw</th>
+                <th>IKV-K3V2</th>
+                <th>Sparse Top-K</th>
+                <th>IKV-KV4</th>
+                <th>IKV-K3V2 Answer Preview</th>
+              </tr>
+            </thead>
+            <tbody id="tbTableBody"></tbody>
+          </table>
+        </div>
+
+        <div id="tbDetailBox" style="margin-top:14px"></div>
+      </div>
+
+      <div class="callout warn">
+        <div class="callout-title">Honest Diagnosis · Where Compression Holds Solid vs. Where It Actually Cracks</div>
+        <p>
+          <strong>1. Real source code (34.4K tok, 5 files) held rock-solid:</strong> <code>IKV-K3V2 (seam=0)</code>, <code>IKV-KV4</code>, and <code>Kv256k-Sparse (9.2% active!)</code> all hit <strong>10/10</strong> on Single-Hop and Multi-Hop Code and <strong>4/5</strong> on Code Logic (<code>C01</code> was a literal <code>+=</code> phrasing miss, semantically right in all 3 modes), cutting TTFT from <strong>19.59 s → 0.69 s (28.4×)</strong>.<br>
+          <strong>2. Dense synthetic look-alike logs exposed real blind-stitch &amp; sparse limits:</strong> On RULER Multi-Needle (<code>B06–B10</code>), both <code>IKV-K3V2</code> and <code>IKV-KV4</code> slipped identically (<strong>3/5</strong> vs <strong>5/5</strong> FP16) on distractors near the File 3 seam (<code>B06</code> pulled <code>NODE-W12</code> WARN instead of <code>NODE-K53</code>; <code>B08</code> pulled <code>PROJECT-CALYPSO</code> 95 instead of 185). Because 4-bit <code>IKV-KV4</code> had the exact same misses, the culprit is <strong>blind cross-file seam / dense synthetic ambiguity</strong>, not 3-bit quantization. Meanwhile <code>Kv256k-Sparse</code> (12.2% Top-K) nailed <code>B06</code> (<code>NODE-K53</code>!) where <code>.ikv</code> missed, but missed <code>B07</code> (<code>radix-router</code>) when the 2-bit sketch didn't pull that single log line into its 26 active pages.<br>
+          <strong>3. 4-Hop pointer chasing needs chain-of-thought:</strong> With <code>effort=0</code> (no thinking scratchpad), even Exact FP16 only got <strong>1/5</strong> on <code>B01–B05</code> (returning the first string <code>TITAN-KESTREL-841</code> on all five). Earlier runs at <code>effort=0.1</code> showed Inkling actively tracing hops in <code>&lt;|content_thinking|&gt;</code>, requiring <code>max_new &gt; 320</code> to finish before answering.
+        </p>
       </div>
     </section>
 
     <!-- EPILOGUE -->
     <section id="epilogue" class="act">
       <div class="act-head">
-        <div class="act-tag">Epilogue · Honest Scorecard</div>
-        <h2>What Worked, What Failed &amp; Where the Numbers Stand</h2>
+        <div class="act-tag">Epilogue · Honest Scorecard &amp; Roadmap</div>
+        <h2>What Worked, What Failed &amp; Where This Goes Next</h2>
         <p class="act-lead">
-          A single plainspoken ledger of every major bet from the night—wins, losses, and caveats side by side.
+          A single plainspoken ledger of every major bet from the night—wins, losses, caveats, and the <code>-O1 / -O2 / -O3</code> memory compiler roadmap.
         </p>
       </div>
       <div class="card">
@@ -1447,14 +1683,37 @@ footer {
               <tr><th>Experiment / Mechanism</th><th>Verdict</th><th>Measured Result</th><th>Honest Caveat / Why</th></tr>
             </thead>
             <tbody>
-              <tr class="row-hi"><td><strong>WHT-K3V2 + DC Mean + WHT2-Sketch + TierSWA</strong></td><td><span class="pill pill-emerald">WIN</span></td><td><code>109 MiB</code> / 256K (<strong>76.7×</strong>), <code>KL 0.0181</code>, <code>16/16</code></td><td>96 live independent 256K sessions in 10.45 GiB; cold pages stay on F_NOCACHE NVMe.</td></tr>
-              <tr class="row-hi"><td><strong>Pre-compiled <code>.ikv</code> Cartridges (<code>inkling-ikv</code>)</strong></td><td><span class="pill pill-emerald">WIN</span></td><td><strong>38.2× faster</strong> TTFT @ 50.3K (<code>30.53s → 0.80s</code>), 6/6 verbatim</td><td>Needs 1-time offline/idle pack; earlier files don't attend to later ones until query time.</td></tr>
+              <tr class="row-hi"><td><strong>WHT-K3V2 + DC Mean + WHT2-Sketch + TierSWA</strong></td><td><span class="pill pill-emerald">WIN</span></td><td><code>109 MiB</code> / 256K (<strong>76.7×</strong> RAM, <strong>23.4×</strong> fewer attn slots), <code>KL 0.0181</code></td><td>96 live 256K sessions in 10.45 GiB; scored <code>14/15</code> on 34.4K codebase at 9.2% active pages; missed 2/5 dense RULER needles at 12.2% Top-K.</td></tr>
+              <tr class="row-hi"><td><strong>Pre-compiled <code>.ikv</code> Cartridges (<code>inkling-ikv</code>)</strong></td><td><span class="pill pill-emerald">WIN</span></td><td><strong>28.4×–38.2× faster</strong> TTFT (<code>14/15</code> on 34.4K code; <code>6/6</code> on 50.3K 2-hop)</td><td>Not a text compressor (<code>~5.5 KiB/tok</code> vs <code>4 B/tok</code> UTF-8 — it's a pre-compiled <code>.o</code> file); slipped on 2/5 dense synthetic RULER distractors (<code>B06/B08</code>).</td></tr>
               <tr class="row-hi"><td><strong>TokenDance + KVCOMM + Fused GPU Kernel</strong></td><td><span class="pill pill-emerald">WIN</span></td><td><code>KL 0.0049–0.0081</code>, <code>95–96/96</code>, <strong>1.28× faster</strong> attn, 60× RAM</td><td>5.93×/227× prefill speedups are projected; selective-recompute scheduler not wired yet.</td></tr>
               <tr class="row-hi"><td><strong>Layer-Pipelined Disk Expert Offload (Mode C)</strong></td><td><span class="pill pill-emerald">WIN</span></td><td><strong>992 tok/s</strong> (7.8G off), <strong>849 tok/s</strong> (15.2G off), <code>0.00e0</code> bit-exact</td><td>Bench hit warm UBC; on cold 8 GiB/s NAND, B_macro≥2048 still hides 7.8G completely.</td></tr>
               <tr class="row-hi"><td><strong>FP16 Conv State Pool (<code>CS_POOL</code>)</strong></td><td><span class="pill pill-emerald">WIN</span></td><td><strong>2× smaller</strong> (<code>−468 MiB</code> @ B=256), <code>rel_L2 0.000098</code></td><td>Zero speed penalty; drop-in replacement for FP32 conv state.</td></tr>
               <tr class="row-bad"><td><strong>6-Class Small-Tile MoE Router (<code>route6</code>)</strong></td><td><span class="pill pill-rose">LOST</span></td><td><code>1,098.7</code> vs <code>1,155.2 tok/s</code> @ B=256 (−5% to −8%)</td><td>M5 Pro favors <code>route4</code>'s coalesced 128-thread SRAM Q4_K staging over extra dispatches.</td></tr>
               <tr class="row-bad"><td><strong>Static No-RoPE Centroid Merging</strong></td><td><span class="pill pill-rose">LOST</span></td><td><code>KL 0.603–1.062</code> (<code>12–15/24</code> argmax)</td><td>Pre-averaging distant keys blurs rare needles; dynamic top-5% page retrieval won 15×.</td></tr>
               <tr class="row-warn"><td><strong>DuoAttention 50% Head Pruning</strong></td><td><span class="pill pill-amber">MIXED</span></td><td><code>KL 0.582</code> at 50% heads; <code>0.101</code> at 75%</td><td>Almost all 64 Inkling heads carry 60–94% far mass—compress pages instead of dropping heads.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Future Compiler Stack & Generalization Roadmap -->
+      <div class="card">
+        <div class="card-head">
+          <h3 class="card-title">What's Next · The <code>-O1 / -O2 / -O3</code> Memory Compiler Stack &amp; Multi-Model Validation</h3>
+          <span class="pill pill-cyan">See inkling-ikv/RESEARCH_NOTES.md</span>
+        </div>
+        <p class="card-note">
+          Everything above relies on just two architectural choices—<strong>majority local SWA</strong> plus <strong>Zero-RoPE global layers</strong>—which are shared by modern frontier hybrids like <strong>Llama 4 (iRoPE)</strong>, <strong>Cohere Command A</strong>, and <strong>HuggingFace SmolLM3 (3B)</strong> (with <strong>Gemma 3</strong> and <strong>Qwen3</strong> as clean RoPE controls). Because Zero-RoPE turns global KV caches into position-free object files, three compiler optimization levels fit naturally into the <strong>exact same <code>.ikv</code> container</strong>:
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Opt Level</th><th>Pass</th><th>Compile Time</th><th>Real Token Reduction</th><th>How It Works &amp; Why Zero-RoPE Makes It Possible</th></tr>
+            </thead>
+            <tbody>
+              <tr class="row-hi"><td><strong><code>-O1</code> (Built)</strong></td><td><code>ikv pack</code> (<code>cc</code>)</td><td>~0.5–1.5 s / file</td><td><code>1.0×</code> tok (<code>5.8×</code> bytes)</td><td>Single forward pass + offline BOS-sink strip + <code>WHT-K3V2</code> + <code>WHT-2bit-sketch</code>. Runs live during idle time (<code>Shadow .ikv</code>).</td></tr>
+              <tr><td><strong><code>-O2</code> (Next)</strong></td><td><code>ikv link</code> (<code>ld</code>)</td><td>~100 ms / bundle</td><td><strong>~3×–5× fewer tok</strong></td><td><strong>Cross-file Zero-RoPE KV deduplication</strong> (+ light dead-token folding): collapses matching boilerplate <code>(K, V)</code> across files (<code>cos &gt; 0.96</code>) into one slot + <code>ln(count)</code> while leaving rare needles untouched. Impossible in RoPE models!</td></tr>
+              <tr><td><strong><code>-O3</code> (Stretch)</strong></td><td><code>ikv distill</code> (release)</td><td>Minutes (MLX / PyTorch)</td><td><strong>100×–250× fewer tok</strong></td><td><em>Cartridges</em>-style self-study gradient distillation for frozen reference corpora (500K-tok docs → 2K–4K synthetic Zero-RoPE slots) that mount flush right beside freshly saved <code>-O1</code> source files.</td></tr>
             </tbody>
           </table>
         </div>
@@ -2896,10 +3155,1054 @@ footer {
     el.innerHTML = svg;
   }
 
+  // ==================== 4 VISUAL EXPLAINERS ====================
+
+  // EXPLAINER #1: Interactive 3-Stage Quantization Walkthrough (Act 1)
+  let activeExp1Stage = '1';
+  function renderExplainer1() {
+    const el = document.getElementById('explainer1Quant');
+    const bannerEl = document.getElementById('explainer1Banner');
+    const statsEl = document.getElementById('explainer1Stats');
+    if (!el) return;
+
+    const W = 820, H = 298, pL = 52, pT = 34, pB = 34;
+    const chartW = 532, ph = H - pT - pB, y0 = pT + ph / 2;
+    const rX = 602, rW = 204;
+    const step = chartW / 16;
+
+    const cCy = cssVar('--cyan'), cEm = cssVar('--emerald'), cAm = cssVar('--amber');
+    const cVi = cssVar('--violet'), cRo = cssVar('--rose'), bgSub = cssVar('--bg-subtle');
+    const bgEl = cssVar('--bg-elev'), brd = cssVar('--border-hi'), txtDim = cssVar('--text-dim');
+
+    const rawVals = [1.52, 1.74, 1.44, 11.50, 1.66, 1.36, 1.82, 1.58, 1.41, 1.78, 1.62, -9.80, 1.49, 1.80, 1.46, 1.69];
+    const dcVals  = [-0.36, 0.48, -0.58, 8.85, 0.22, -0.76, 0.68, -0.14, -0.64, 0.56, 0.08, -7.70, -0.42, 0.64, -0.50, 0.34];
+    const whtVals = [-0.82, 1.42, -0.28, 2.05, -1.35, 0.64, -2.18, 0.31, 1.18, -0.71, 0.19, -1.62, 0.94, -0.45, 1.76, -1.08];
+
+    const unifRaw = [-11.5, -7.67, -3.83, 0, 3.83, 7.67, 11.5];
+    const unifDc  = [-8.85, -5.90, -2.95, 0, 2.95, 5.90, 8.85];
+    const lmLevels = [-2.37, -1.48, -0.83, -0.27, 0.27, 0.83, 1.48, 2.37];
+
+    const stage = activeExp1Stage;
+    const vals = stage === '1' ? rawVals : (stage === '2' ? dcVals : whtVals);
+    const levels = stage === '1' ? unifRaw : (stage === '2' ? unifDc : lmLevels);
+    const yMax = stage === '1' ? 12.8 : (stage === '2' ? 10.2 : 3.05);
+    const yPos = v => y0 - (v / yMax) * (ph / 2);
+    const quantize = (v, lvls) => {
+      let best = lvls[0], bd = Infinity;
+      for (let i = 0; i < lvls.length; i++) {
+        const d = Math.abs(v - lvls[i]);
+        if (d < bd) { bd = d; best = lvls[i]; }
+      }
+      return best;
+    };
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    // Background frame for left chart
+    svg += `<rect x="${pL}" y="${pT}" width="${chartW}" height="${ph}" rx="8" fill="${bgEl}" stroke="${cssVar('--border')}" stroke-width="1"/>`;
+
+    // Stage-specific bands behind bars
+    if (stage === '1') {
+      const dzTop = yPos(1.92), dzBot = yPos(-1.92);
+      svg += `<rect x="${pL+1}" y="${dzTop.toFixed(1)}" width="${chartW-2}" height="${(dzBot-dzTop).toFixed(1)}" fill="${cRo}" fill-opacity="0.11"/>`;
+      svg += `<text x="${pL+8}" y="${(dzBot-4).toFixed(1)}" font-size="9" fill="${cRo}" font-weight="700">Uniform 3-bit "0" dead zone ([-1.92, +1.92])</text>`;
+    } else if (stage === '2') {
+      const dzTop = yPos(1.48), dzBot = yPos(-1.48);
+      svg += `<rect x="${pL+1}" y="${dzTop.toFixed(1)}" width="${chartW-2}" height="${(dzBot-dzTop).toFixed(1)}" fill="${cAm}" fill-opacity="0.11"/>`;
+      svg += `<text x="${pL+8}" y="${(dzBot+13).toFixed(1)}" font-size="9" fill="${cAm}" font-weight="700">Centered near 0, but 2 spikes still stretch uniform bins</text>`;
+    }
+
+    // Quantization grid lines
+    levels.forEach(lv => {
+      const y = yPos(lv);
+      const isZero = Math.abs(lv) < 1e-6;
+      const strokeCol = stage === '3' ? cEm : (isZero ? brd : cssVar('--grid-line'));
+      svg += `<line x1="${pL}" y1="${y.toFixed(1)}" x2="${pL+chartW}" y2="${y.toFixed(1)}" stroke="${strokeCol}" stroke-width="${stage === '3' ? 1 : (isZero ? 1.3 : 1)}" stroke-dasharray="${stage === '3' ? '4,3' : (isZero ? '' : '3,3')}" opacity="${stage === '3' ? 0.55 : 0.9}"/>`;
+      svg += `<text x="${pL-7}" y="${(y+3.5).toFixed(1)}" text-anchor="end" font-size="9" fill="${stage === '3' ? cEm : txtDim}">${lv > 0 ? '+' + lv.toFixed(1) : lv.toFixed(1)}</text>`;
+    });
+
+    // Zero axis line
+    svg += `<line x1="${pL}" y1="${y0}" x2="${pL+chartW}" y2="${y0}" stroke="${brd}" stroke-width="1.3"/>`;
+    if (stage === '3') {
+      svg += `<text x="${pL-7}" y="${y0+3.5}" text-anchor="end" font-size="9" fill="${txtDim}">0.0</text>`;
+    }
+
+    // Stage 1 DC offset dashed indicator
+    if (stage === '1') {
+      const yMu = yPos(1.58);
+      svg += `<line x1="${pL}" y1="${yMu.toFixed(1)}" x2="${pL+chartW}" y2="${yMu.toFixed(1)}" stroke="${cAm}" stroke-width="1.6" stroke-dasharray="5,3"/>`;
+      svg += `<text x="${pL+chartW-8}" y="${(yPos(2.35)).toFixed(1)}" text-anchor="end" font-size="9" fill="${cAm}" font-weight="700">Constant DC offset μ (up to 49.6% of head energy)</text>`;
+    }
+
+    // Chart header label
+    const hdrTxt = stage === '1'
+      ? '16 Key Dimensions (Raw) · Giant DC Offset + 2 Spikes (+11.5, -9.8)'
+      : (stage === '2'
+        ? '16 Key Dimensions After k′ = k − μ · Zero-Centered (DC Energy Gone)'
+        : '16 Key Dimensions After 7-op WHT_128 + ±1 Signs · Smooth Bell Curve');
+    svg += `<text x="${pL}" y="20" font-size="11" class="svg-strong">${hdrTxt}</text>`;
+
+    // Bars + Quantized dot markers
+    vals.forEach((v, i) => {
+      const q = quantize(v, levels);
+      const cx = pL + i * step + step / 2;
+      const bw = 18;
+      const yv = yPos(v), yq = yPos(q);
+      const top = Math.min(y0, yv), h = Math.max(2, Math.abs(yv - y0));
+      const isSpike = (stage !== '3') && (i === 3 || i === 11);
+      const barCol = stage === '3' ? cEm : (isSpike ? cRo : (stage === '1' ? cAm : cCy));
+      const err = Math.abs(v - q);
+      const tipRows = [
+        ['True Value', (v >= 0 ? '+' : '') + v.toFixed(2)],
+        ['3-Bit Quantized', (q >= 0 ? '+' : '') + q.toFixed(2)],
+        ['Rounding Error', err.toFixed(2)],
+        ['Status', stage === '1' && !isSpike ? 'Crushed straight to 0!' : (stage === '3' ? 'Clean Lloyd-Max match' : (isSpike ? 'Outlier dominates scale' : 'Zero-centered'))]
+      ];
+      svg += `<g ${tipAttr('Key dim d' + i + ' (Stage ' + stage + ')', tipRows)}>`;
+      svg += `<rect x="${(cx-bw/2).toFixed(1)}" y="${top.toFixed(1)}" width="${bw}" height="${h.toFixed(1)}" rx="3" fill="${barCol}" fill-opacity="${isSpike || stage === '3' ? 0.85 : 0.68}"/>`;
+      // Quantized snap marker
+      const dotCol = (stage === '1' && !isSpike) ? cRo : (stage === '3' ? cCy : cAm);
+      svg += `<circle cx="${cx.toFixed(1)}" cy="${yq.toFixed(1)}" r="${stage === '3' ? 3.8 : 3.5}" fill="${dotCol}" stroke="${cssVar('--bg-card')}" stroke-width="1.2"/>`;
+      svg += `<text x="${cx.toFixed(1)}" y="${H-14}" text-anchor="middle" font-size="8.5">d${i}</text>`;
+      if (isSpike) {
+        const lblY = v > 0 ? top - 5 : top + h + 12;
+        svg += `<text x="${cx.toFixed(1)}" y="${lblY.toFixed(1)}" text-anchor="middle" font-size="9.5" fill="${cRo}" font-weight="700">${v > 0 ? '+' : ''}${v.toFixed(1)}</text>`;
+      }
+      svg += `</g>`;
+    });
+
+    // Right-hand side panel (distribution / math / Lloyd-Max bell curve)
+    svg += `<rect x="${rX}" y="${pT}" width="${rW}" height="${ph}" rx="8" fill="${bgEl}" stroke="${stage === '3' ? cEm : (stage === '2' ? cCy : cRo)}" stroke-width="1.4"/>`;
+    if (stage === '1') {
+      svg += `<text x="${rX+rW/2}" y="20" text-anchor="middle" font-size="10.5" fill="${cRo}" font-weight="700">Uniform 3-bit Buckets</text>`;
+      // Show bucket counts aligned with yPos(lv)
+      const counts = { '-11.5': 1, '-7.67': 0, '-3.83': 0, '0': 14, '3.83': 0, '7.67': 0, '11.5': 1 };
+      levels.forEach(lv => {
+        const y = yPos(lv);
+        const cnt = counts[String(lv)] || 0;
+        const barW = cnt > 0 ? Math.max(18, (cnt / 14) * 96) : 4;
+        const col = cnt === 14 ? cRo : (cnt > 0 ? cAm : brd);
+        svg += `<line x1="${rX+12}" y1="${y.toFixed(1)}" x2="${rX+rW-12}" y2="${y.toFixed(1)}" stroke="${cssVar('--grid-line')}" stroke-dasharray="2,2"/>`;
+        svg += `<rect x="${rX+14}" y="${(y-7).toFixed(1)}" width="${barW.toFixed(1)}" height="14" rx="3" fill="${col}" fill-opacity="${cnt > 0 ? 0.85 : 0.35}"/>`;
+        const lbl = cnt === 14 ? '14 dims → 0!' : (cnt > 0 ? '1 spike' : 'empty');
+        svg += `<text x="${(rX+20+barW).toFixed(1)}" y="${(y+3.5).toFixed(1)}" font-size="9" fill="${cnt === 14 ? cRo : txtDim}" font-weight="${cnt === 14 ? '700' : '400'}">${lbl}</text>`;
+      });
+    } else if (stage === '2') {
+      svg += `<text x="${rX+rW/2}" y="20" text-anchor="middle" font-size="10.5" fill="${cCy}" font-weight="700">Why Subtracting μ Is Free</text>`;
+      svg += `<rect x="${rX+12}" y="${pT+14}" width="${rW-24}" height="52" rx="6" fill="${cCy}" fill-opacity="0.14" stroke="${cCy}" stroke-width="1"/>`;
+      svg += `<text x="${rX+rW/2}" y="${pT+35}" text-anchor="middle" font-size="11" fill="${cCy}" font-weight="700">q·(k − μ) = q·k − q·μ</text>`;
+      svg += `<text x="${rX+rW/2}" y="${pT+54}" text-anchor="middle" font-size="9">Same shift on every key!</text>`;
+
+      svg += `<text x="${rX+16}" y="${pT+90}" font-size="9.5" class="svg-strong">1. Constant drops out</text>`;
+      svg += `<text x="${rX+16}" y="${pT+104}" font-size="8.8">Softmax ignores uniform shifts.</text>`;
+      svg += `<text x="${rX+16}" y="${pT+126}" font-size="9.5" class="svg-strong">2. Sink shifted once</text>`;
+      svg += `<text x="${rX+16}" y="${pT+140}" font-size="8.8">Just adjust sink by −q·μ.</text>`;
+      svg += `<text x="${rX+16}" y="${pT+162}" font-size="9.5" fill="${cEm}" font-weight="700">3. Up to 49.6% energy cut</text>`;
+      svg += `<text x="${rX+16}" y="${pT+176}" font-size="8.8">Zero accuracy loss (KL 1.76×↓).</text>`;
+
+      svg += `<rect x="${rX+12}" y="${pT+190}" width="${rW-24}" height="28" rx="5" fill="${cAm}" fill-opacity="0.15" stroke="${cAm}" stroke-width="1"/>`;
+      svg += `<text x="${rX+rW/2}" y="${pT+208}" text-anchor="middle" font-size="9" fill="${cAm}" font-weight="700">Next: smash the 2 spikes →</text>`;
+    } else {
+      svg += `<text x="${rX+rW/2}" y="20" text-anchor="middle" font-size="10.5" fill="${cEm}" font-weight="700">Bell Curve + Lloyd-Max</text>`;
+      // Smooth vertical Gaussian curve aligned with yPos(v)
+      const curveX0 = rX + 18, curveMaxW = 128;
+      let pts = `M ${curveX0} ${yPos(2.9).toFixed(1)}`;
+      for (let k = 0; k <= 48; k++) {
+        const v = 2.9 - (k / 48) * 5.8;
+        const pdf = Math.exp(-0.5 * (v / 1.1) * (v / 1.1));
+        const x = curveX0 + pdf * curveMaxW;
+        const y = yPos(v);
+        pts += ` L ${x.toFixed(1)} ${y.toFixed(1)}`;
+      }
+      pts += ` L ${curveX0} ${yPos(-2.9).toFixed(1)} Z`;
+      svg += `<path d="${pts}" fill="${cEm}" fill-opacity="0.22" stroke="${cEm}" stroke-width="2"/>`;
+      lmLevels.forEach((lv, idx) => {
+        const y = yPos(lv);
+        const pdf = Math.exp(-0.5 * (lv / 1.1) * (lv / 1.1));
+        const xEnd = curveX0 + pdf * curveMaxW;
+        svg += `<line x1="${curveX0}" y1="${y.toFixed(1)}" x2="${xEnd.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${cCy}" stroke-width="1.5"/>`;
+        svg += `<circle cx="${xEnd.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="${cCy}"/>`;
+        if (idx === 3 || idx === 4 || idx === 0 || idx === 7) {
+          svg += `<text x="${(xEnd+5).toFixed(1)}" y="${(y+3).toFixed(1)}" font-size="8.5" fill="${cEm}" font-weight="700">b${idx}</text>`;
+        }
+      });
+      svg += `<rect x="${rX+8}" y="${H-26}" width="${rW-16}" height="22" rx="6" fill="${cEm}" fill-opacity="0.16" stroke="${cEm}" stroke-width="1"/>`;
+      svg += `<text x="${rX+rW/2}" y="${H-11}" text-anchor="middle" font-size="9.5" fill="${cEm}" font-weight="700">K_cos: 0.9828 → 0.9912</text>`;
+    }
+
+    // Legend dot note bottom-left
+    svg += `<text x="${pL}" y="${H-2}" font-size="8.5" fill="${txtDim}">● Dots show where each dim snaps after 3-bit rounding · Hover any bar for exact error</text>`;
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+
+    if (stage === '1') {
+      bannerEl.style.borderLeftColor = cRo;
+      bannerEl.innerHTML = `<span><strong>Why naive 3-bit dies:</strong> Two outlier spikes (<code>+11.5</code>, <code>−9.8</code>) plus a big shared offset force the uniform grid wide—crushing all <strong>14 normal channels straight into 0</strong> while 4 of 7 buckets sit empty.</span>`;
+      statsEl.innerHTML = `
+        <div class="metric-mini"><div class="m-lbl">Peak Outlier</div><div class="m-num" style="color:var(--rose)">+11.5 / −9.8</div><div class="m-sub">Forces step size = 3.83</div></div>
+        <div class="metric-mini"><div class="m-lbl">DC Offset Energy</div><div class="m-num" style="color:var(--amber)">Up to 49.6%</div><div class="m-sub">Wasted on constant μ</div></div>
+        <div class="metric-mini"><div class="m-lbl">Dims Crushed to 0</div><div class="m-num" style="color:var(--rose)">14 / 16</div><div class="m-sub">4 outer bins completely empty</div></div>
+        <div class="metric-mini"><div class="m-lbl">Quantizer Fit</div><div class="m-num" style="color:var(--rose)">Broken</div><div class="m-sub">Fine detail wiped out</div></div>
+      `;
+    } else if (stage === '2') {
+      bannerEl.style.borderLeftColor = cCy;
+      bannerEl.innerHTML = `<span><strong>Free math via DC Mean:</strong> Subtracting the per-head average key <code>μ</code> removes up to <strong>49.6% of total key energy</strong> (<code>q·(k−μ) = q·k − q·μ</code> cancels in softmax; sink adjusted once), cutting live KL by <strong>1.76×</strong>—but the 2 spikes still stretch uniform bins.</span>`;
+      statsEl.innerHTML = `
+        <div class="metric-mini"><div class="m-lbl">DC Offset Removed</div><div class="m-num" style="color:var(--emerald)">−49.6% peak</div><div class="m-sub">24–37% across all 8 full slots</div></div>
+        <div class="metric-mini"><div class="m-lbl">Softmax Error</div><div class="m-num" style="color:var(--cyan)">0.00e0 (Exact)</div><div class="m-sub">Sink shifted once by −q·μ</div></div>
+        <div class="metric-mini"><div class="m-lbl">Remaining Spikes</div><div class="m-num" style="color:var(--amber)">+8.9 / −7.7</div><div class="m-sub">Still waste outer uniform bins</div></div>
+        <div class="metric-mini"><div class="m-lbl">Key Fidelity (pre-WHT)</div><div class="m-num" style="color:var(--amber)">0.9828</div><div class="m-sub">Cosine similarity before WHT</div></div>
+      `;
+    } else {
+      bannerEl.style.borderLeftColor = cEm;
+      bannerEl.innerHTML = `<span><strong>Hadamard + Lloyd-Max win:</strong> A 7-op <code>WHT_128</code> with random <code>±1</code> signs smears both spikes evenly into a Gaussian bell curve lined up with non-uniform Lloyd-Max buckets—lifting key fidelity from <strong><code>K_cos 0.9828 → 0.9912</code></strong> with zero crushed dims.</span>`;
+      statsEl.innerHTML = `
+        <div class="metric-mini"><div class="m-lbl">Peak After WHT_128</div><div class="m-num" style="color:var(--emerald)">2.18 (5.3×↓)</div><div class="m-sub">Outliers smeared evenly</div></div>
+        <div class="metric-mini"><div class="m-lbl">Active 3-Bit Buckets</div><div class="m-num" style="color:var(--cyan)">8 / 8 Used</div><div class="m-sub">Dense near 0, wide in tails</div></div>
+        <div class="metric-mini"><div class="m-lbl">Key Fidelity (K_cos)</div><div class="m-num" style="color:var(--emerald)">0.9912</div><div class="m-sub">Up from 0.9828 without WHT</div></div>
+        <div class="metric-mini"><div class="m-lbl">Transform Cost</div><div class="m-num">7 butterfly ops</div><div class="m-sub">Fused in registers on GPU</div></div>
+      `;
+    }
+  }
+  document.querySelectorAll('#exp1Stages .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#exp1Stages .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeExp1Stage = btn.dataset.stage;
+      renderExplainer1();
+    });
+  });
+
+  // EXPLAINER #2: Why Zero-RoPE Makes Blocks Snap Together Like LEGO Bricks (Act 4)
+  let activeExp2Shift = '500';
+  function renderExplainer2() {
+    const el = document.getElementById('explainer2Lego');
+    if (!el) return;
+
+    const shift = activeExp2Shift === '50000' ? 50000 : 500;
+    const shiftLbl = shift === 50000 ? '50,000' : '500';
+    const endLbl = shift === 50000 ? '54,000' : '4,500';
+    const prefixTitle = shift === 50000 ? 'Context' : 'System';
+    const deltaDeg = shift === 50000 ? 225 : 115;
+
+    const W = 820, H = 348;
+    const cCy = cssVar('--cyan'), cEm = cssVar('--emerald'), cAm = cssVar('--amber');
+    const cVi = cssVar('--violet'), cRo = cssVar('--rose');
+    const bgEl = cssVar('--bg-elev'), bgSub = cssVar('--bg-subtle'), brd = cssVar('--border-hi'), txtDim = cssVar('--text-dim');
+
+    function drawClock(cx, cy, r, cachedDeg, expectedDeg) {
+      let s = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${bgEl}" stroke="${brd}" stroke-width="1.2"/>`;
+      s += `<circle cx="${cx}" cy="${cy}" r="2" fill="${brd}"/>`;
+      const rad1 = (cachedDeg - 90) * Math.PI / 180;
+      const x1 = cx + r * 0.72 * Math.cos(rad1), y1 = cy + r * 0.72 * Math.sin(rad1);
+      if (expectedDeg === null) {
+        s += `<line x1="${cx}" y1="${cy}" x2="${x1.toFixed(1)}" y2="${y1.toFixed(1)}" stroke="${cCy}" stroke-width="2.2" stroke-linecap="round"/>`;
+        s += `<circle cx="${x1.toFixed(1)}" cy="${y1.toFixed(1)}" r="2.3" fill="${cCy}"/>`;
+      } else {
+        // Stale cached arrow (dashed rose) vs needed arrow (solid amber)
+        const rad2 = (expectedDeg - 90) * Math.PI / 180;
+        const x2 = cx + r * 0.74 * Math.cos(rad2), y2 = cy + r * 0.74 * Math.sin(rad2);
+        s += `<line x1="${cx}" y1="${cy}" x2="${x1.toFixed(1)}" y2="${y1.toFixed(1)}" stroke="${cRo}" stroke-width="2" stroke-dasharray="2.5,2" stroke-linecap="round"/>`;
+        s += `<line x1="${cx}" y1="${cy}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${cAm}" stroke-width="2.2" stroke-linecap="round"/>`;
+        s += `<circle cx="${x2.toFixed(1)}" cy="${y2.toFixed(1)}" r="2.2" fill="${cAm}"/>`;
+        s += `<text x="${cx+r-1}" y="${cy-r+5}" text-anchor="middle" font-size="9.5" fill="${cRo}" font-weight="700">✕</text>`;
+      }
+      return s;
+    }
+
+    function drawContentGlyph(cx, cy, heights, col) {
+      let s = '';
+      const w = 4.5, gap = 3;
+      const x0 = cx - ((heights.length * (w + gap) - gap) / 2);
+      heights.forEach((h, idx) => {
+        s += `<rect x="${(x0 + idx * (w + gap)).toFixed(1)}" y="${(cy + 10 - h).toFixed(1)}" width="${w}" height="${h}" rx="1.5" fill="${col}"/>`;
+      });
+      return s;
+    }
+
+    function drawLegoStuds(x, y, w, count, col) {
+      let s = '';
+      const studW = 14, studH = 5;
+      const step = w / count;
+      for (let i = 0; i < count; i++) {
+        const sx = x + i * step + (step - studW) / 2;
+        s += `<rect x="${sx.toFixed(1)}" y="${(y - studH + 1).toFixed(1)}" width="${studW}" height="${studH}" rx="2" fill="${col}" fill-opacity="0.35" stroke="${col}" stroke-width="1.2"/>`;
+      }
+      return s;
+    }
+
+    const baseAngles = [20, 78, 142, 205];
+    const glyphs = [[10, 17, 13], [16, 9, 15], [12, 18, 8], [15, 13, 17]];
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}">
+      <defs>
+        <marker id="exp2ArrRose" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 10 5 L 0 9 z" fill="${cRo}"/>
+        </marker>
+        <marker id="exp2ArrEm" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 10 5 L 0 9 z" fill="${cEm}"/>
+        </marker>
+      </defs>`;
+
+    // ===== LEFT PANEL: Standard RoPE LLM =====
+    svg += `<rect x="10" y="10" width="390" height="328" rx="12" fill="${bgEl}" stroke="${cRo}" stroke-width="1.5"/>`;
+    svg += `<rect x="22" y="22" width="366" height="28" rx="6" fill="${cRo}" fill-opacity="0.14"/>`;
+    svg += `<text x="205" y="40" text-anchor="middle" font-size="11" fill="${cRo}" font-weight="700">Standard RoPE LLM · Angles Baked Into Keys</text>`;
+
+    // Left Row 1: Compiled standalone pos 0..4000
+    svg += `<text x="24" y="68" font-size="9.5" class="svg-strong">1. Compiled standalone: file.rs (pos 0..4000)</text>`;
+    svg += `<rect x="24" y="76" width="362" height="58" rx="8" fill="${bgSub}" stroke="${cCy}" stroke-width="1.3" ${tipAttr('Standard RoPE · Cached at pos 0..4000', [['Baked Angles', 'Every key is permanently rotated by θ·pos'], ['Reusable?', 'Only if pasted at exact pos 0']])}/>`;
+    baseAngles.forEach((ang, i) => {
+      const cx = 70 + i * 90;
+      svg += drawClock(cx, 102, 14, ang, null);
+      svg += `<text x="${cx}" y="128" text-anchor="middle" font-size="8.5" fill="${txtDim}">k${i} (${ang}°)</text>`;
+    });
+
+    // Left Arrow down
+    svg += `<line x1="205" y1="136" x2="205" y2="162" stroke="${cRo}" stroke-width="2" marker-end="url(#exp2ArrRose)"/>`;
+    svg += `<text x="215" y="153" font-size="9" fill="${cRo}" font-weight="700">Move after ${shiftLbl}-tok prompt</text>`;
+
+    // Left Row 2: Placed at pos 500..4500 (mismatch!)
+    svg += `<text x="24" y="178" font-size="9.5" class="svg-strong">2. Placed at pos ${shiftLbl}..${endLbl} — every arrow clashes!</text>`;
+    svg += `<rect x="24" y="186" width="88" height="62" rx="7" fill="${bgSub}" stroke="${brd}" stroke-width="1.2"/>`;
+    svg += `<text x="68" y="212" text-anchor="middle" font-size="9.5" class="svg-strong">${prefixTitle}</text>`;
+    svg += `<text x="68" y="227" text-anchor="middle" font-size="8.5" fill="${txtDim}">0..${shiftLbl}</text>`;
+
+    svg += `<rect x="118" y="186" width="268" height="62" rx="7" fill="${cRo}" fill-opacity="0.08" stroke="${cRo}" stroke-width="1.5" stroke-dasharray="5,3" ${tipAttr('RoPE Angle Clash', [['Cached Arrow (dashed rose)', 'Still rotated for pos 0..4000'], ['Needed Arrow (solid amber)', 'Shifted by +' + shiftLbl + ' positions'], ['Result', 'Cache mismatch → forced GPU recompute']])}/>`;
+    baseAngles.forEach((ang, i) => {
+      const cx = 152 + i * 66;
+      svg += drawClock(cx, 212, 14, ang, (ang + deltaDeg) % 360);
+      svg += `<text x="${cx}" y="241" text-anchor="middle" font-size="8" fill="${cRo}" font-weight="700">wrong θ</text>`;
+    });
+    svg += `<text x="205" y="266" text-anchor="middle" font-size="8.5" fill="${txtDim}"><tspan fill="${cRo}">--- cached angle</tspan>   vs   <tspan fill="${cAm}">─── expected angle @ +${shiftLbl}</tspan></text>`;
+
+    // Left Bottom Verdict
+    svg += `<rect x="22" y="278" width="366" height="48" rx="8" fill="${cRo}" fill-opacity="0.14" stroke="${cRo}" stroke-width="1"/>`;
+    svg += `<text x="205" y="298" text-anchor="middle" font-size="10.5" fill="${cRo}" font-weight="700">✕ Cache Mismatch → Forced Recompute</text>`;
+    svg += `<text x="205" y="315" text-anchor="middle" font-size="9">Shifting a file breaks every baked RoPE key vector.</text>`;
+
+    // ===== RIGHT PANEL: Inkling 2 Mini (Zero RoPE + 40/48 SWA) =====
+    svg += `<rect x="420" y="10" width="390" height="328" rx="12" fill="${bgEl}" stroke="${cEm}" stroke-width="1.5"/>`;
+    svg += `<rect x="432" y="22" width="366" height="28" rx="6" fill="${cEm}" fill-opacity="0.14"/>`;
+    svg += `<text x="615" y="40" text-anchor="middle" font-size="11" fill="${cEm}" font-weight="700">Inkling 2 Mini · Zero RoPE + 40/48 SWA</text>`;
+
+    // Right Row 1: Pure content LEGO brick
+    svg += `<text x="434" y="68" font-size="9.5" class="svg-strong">1. Compiled standalone: file.rs (pure content brick)</text>`;
+    svg += drawLegoStuds(434, 80, 362, 6, cEm);
+    svg += `<rect x="434" y="80" width="362" height="54" rx="7" fill="${cEm}" fill-opacity="0.10" stroke="${cEm}" stroke-width="1.5" ${tipAttr('Zero-RoPE Content Brick', [['Baked Position Angle', '0° (None!)'], ['Keys Stored', 'Pure position-free content vectors'], ['Reusable?', 'Drops into pos 500 or 50,000 unchanged']])}/>`;
+    glyphs.forEach((g, i) => {
+      const cx = 480 + i * 90;
+      svg += drawContentGlyph(cx, 102, g, cEm);
+      svg += `<text x="${cx}" y="126" text-anchor="middle" font-size="8.5" fill="${cEm}">k${i} (pure)</text>`;
+    });
+
+    // Right Arrow down
+    svg += `<line x1="615" y1="136" x2="615" y2="162" stroke="${cEm}" stroke-width="2" marker-end="url(#exp2ArrEm)"/>`;
+    svg += `<text x="625" y="153" font-size="9" fill="${cEm}" font-weight="700">Snap at +${shiftLbl} · 0 re-rotation!</text>`;
+
+    // Right Row 2: Interlocking LEGO bricks
+    svg += `<text x="434" y="178" font-size="9.5" class="svg-strong">2. Snapped at pos ${shiftLbl}..${endLbl} — identical bytes!</text>`;
+    svg += drawLegoStuds(434, 190, 96, 2, cVi);
+    svg += `<rect x="434" y="190" width="96" height="54" rx="7" fill="${cVi}" fill-opacity="0.14" stroke="${cVi}" stroke-width="1.4"/>`;
+    svg += `<text x="482" y="213" text-anchor="middle" font-size="9.5" fill="${cVi}" font-weight="700">${prefixTitle}</text>`;
+    svg += `<text x="482" y="228" text-anchor="middle" font-size="8.5" fill="${txtDim}">0..${shiftLbl}</text>`;
+
+    svg += drawLegoStuds(532, 190, 264, 5, cEm);
+    svg += `<rect x="532" y="190" width="264" height="54" rx="7" fill="${cEm}" fill-opacity="0.14" stroke="${cEm}" stroke-width="1.6" ${tipAttr('Zero-RoPE Plug-and-Play Mount', [['Offset', 'pos ' + shiftLbl + '..' + endLbl], ['Re-rotation Needed', 'Zero! Keys stay bit-identical'], ['40/48 SWA Layers', 'Physically blind past 1,024 tokens'], ['Relative Bias', 'Added dynamically at query time (d < 1024)']])}/>`;
+    glyphs.forEach((g, i) => {
+      const cx = 566 + i * 65;
+      svg += drawContentGlyph(cx, 211, g, cEm);
+      svg += `<text x="${cx}" y="236" text-anchor="middle" font-size="8" fill="${cEm}" font-weight="700">same k${i}</text>`;
+    });
+    // Glowing snap badge right on the seam!
+    svg += `<circle cx="531" cy="217" r="10" fill="${cEm}"/>`;
+    svg += `<text x="531" y="221" text-anchor="middle" font-size="11" fill="#061018" font-weight="700">✓</text>`;
+
+    // Right SWA 1024-token wall + dynamic query-time bias callout
+    svg += `<line x1="726" y1="248" x2="796" y2="248" stroke="${cAm}" stroke-width="2.5"/>`;
+    svg += `<line x1="726" y1="244" x2="726" y2="252" stroke="${cAm}" stroke-width="2"/>`;
+    svg += `<line x1="796" y1="244" x2="796" y2="252" stroke="${cAm}" stroke-width="2"/>`;
+    svg += `<text x="720" y="252" text-anchor="end" font-size="8.5" fill="${txtDim}">40/48 SWA stop past 1,024 tok ·</text>`;
+    svg += `<text x="761" y="264" text-anchor="middle" font-size="8.3" fill="${cAm}" font-weight="700">Live bias d&lt;1024</text>`;
+    svg += `<text x="434" y="264" font-size="8.3" fill="${cCy}">8 Full layers = 100% position-free</text>`;
+
+    // Right Bottom Verdict
+    svg += `<rect x="432" y="278" width="366" height="48" rx="8" fill="${cEm}" fill-opacity="0.14" stroke="${cEm}" stroke-width="1"/>`;
+    svg += `<text x="615" y="298" text-anchor="middle" font-size="10.5" fill="${cEm}" font-weight="700">✓ Snaps In Anywhere · Zero Re-Rotation</text>`;
+    svg += `<text x="615" y="315" text-anchor="middle" font-size="9">Drops in at pos 500 or 50,000 → 95–96/96 exact argmax!</text>`;
+
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+  document.querySelectorAll('#exp2Shift .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#exp2Shift .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeExp2Shift = btn.dataset.shift;
+      renderExplainer2();
+    });
+  });
+
+  // EXPLAINER #3: Interactive Library Desk & Index Card Catalog (Act 5)
+  let activeExp3Step = '1';
+  function renderExplainer3() {
+    const el = document.getElementById('explainer3Library');
+    const bannerEl = document.getElementById('explainer3Banner');
+    const statsEl = document.getElementById('explainer3Stats');
+    if (!el) return;
+
+    const st = activeExp3Step;
+    const W = 820, H = 348;
+    const cCy = cssVar('--cyan'), cEm = cssVar('--emerald'), cAm = cssVar('--amber');
+    const cVi = cssVar('--violet'), cRo = cssVar('--rose');
+    const bgEl = cssVar('--bg-elev'), bgSub = cssVar('--bg-subtle'), brd = cssVar('--border-hi'), txtDim = cssVar('--text-dim');
+
+    // Opacity helpers per step so active path pops cleanly
+    const opShelf = st === '2' ? 1.0 : 0.55;
+    const opDesk  = (st === '2' || st === '3') ? 1.0 : 0.50;
+    const opIdx   = (st === '1' || st === '3') ? 1.0 : 0.55;
+    const opQuery = 1.0;
+    const opLocal = st === '3' ? 1.0 : 0.65;
+    const opSwa   = st === '3' ? 0.92 : 0.60;
+
+    const hotTiles = [6, 19, 28, 43, 54]; // visual Top-64 pages on shelf
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}">
+      <defs>
+        <marker id="exp3ArrCy" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 10 5 L 0 9 z" fill="${cCy}"/>
+        </marker>
+        <marker id="exp3ArrEm" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 10 5 L 0 9 z" fill="${cEm}"/>
+        </marker>
+        <marker id="exp3ArrVi" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 10 5 L 0 9 z" fill="${cVi}"/>
+        </marker>
+        <marker id="exp3ArrAm" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 10 5 L 0 9 z" fill="${cAm}"/>
+        </marker>
+      </defs>`;
+
+    // ===== LEFT ZONE: NVMe Shelf (1.34 GiB) =====
+    svg += `<g opacity="${opShelf}" ${tipAttr('NVMe Bookshelf (F_NOCACHE)', [['Pages Stored', '2,048 compressed WHT-K3V2 pages (262,144 tok)'], ['Disk Footprint', '1.34 GiB (vs 8.00 GiB raw FP16)'], ['RAM Bloat', '0 MiB (F_NOCACHE skips OS page cache)']])}>`;
+    svg += `<rect x="12" y="14" width="218" height="320" rx="12" fill="${bgEl}" stroke="${st === '2' ? cEm : brd}" stroke-width="${st === '2' ? 2 : 1.3}"/>`;
+    svg += `<text x="121" y="36" text-anchor="middle" font-size="11" class="svg-strong">NVMe Bookshelf</text>`;
+    svg += `<text x="121" y="51" text-anchor="middle" font-size="9" fill="${cCy}">2,048 WHT-K3V2 pages = 1.34 GiB</text>`;
+    // 8x8 miniature bookshelf of compressed pages
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const idx = r * 8 + c;
+        const isHot = hotTiles.indexOf(idx) !== -1;
+        const tx = 26 + c * 24, ty = 66 + r * 28;
+        const fill = isHot && st !== '1' ? cEm : (isHot && st === '1' ? cCy : bgSub);
+        const stroke = isHot ? (st === '2' ? cEm : cCy) : cssVar('--border');
+        svg += `<rect x="${tx}" y="${ty}" width="19" height="22" rx="3" fill="${fill}" fill-opacity="${isHot ? 0.85 : 0.9}" stroke="${stroke}" stroke-width="${isHot ? 1.5 : 0.9}"/>`;
+      }
+    }
+    svg += `<rect x="24" y="296" width="194" height="26" rx="6" fill="${bgSub}"/>`;
+    svg += `<text x="121" y="313" text-anchor="middle" font-size="8.6" fill="${txtDim}">Cold pages stay off RAM (F_NOCACHE)</text>`;
+    svg += `</g>`;
+
+    // ===== RIGHT CONTAINER: RAM Working Set = 109.0 MiB =====
+    svg += `<rect x="300" y="14" width="508" height="320" rx="12" fill="${bgEl}" stroke="${cCy}" stroke-width="1.4" stroke-dasharray="6,3"/>`;
+    svg += `<text x="314" y="36" font-size="11" class="svg-strong">RAM WORKING SET = 109.0 MiB</text>`;
+    svg += `<rect x="614" y="21" width="180" height="22" rx="11" fill="${cEm}" fill-opacity="0.16" stroke="${cEm}" stroke-width="1"/>`;
+    svg += `<text x="704" y="35" text-anchor="middle" font-size="9.5" fill="${cEm}" font-weight="700">8,361 → 109 MiB (76.7×)</text>`;
+
+    // Block 1: Open Desk — Top-64 Sharp Pages (10.5 MiB)
+    svg += `<g opacity="${opDesk}" ${tipAttr('Open Desk · Top-64 Sharp Pages', [['RAM Size', '10.5 MiB'], ['Tokens in Full Detail', '64 pages × 128 tok = 8,192 sharpest far tokens'], ['Codec', 'WHT-K3V2 (3-bit K / 2-bit V)']])}>`;
+    svg += `<rect x="314" y="50" width="226" height="80" rx="9" fill="${st === '2' || st === '3' ? cEm : bgSub}" fill-opacity="${st === '2' || st === '3' ? 0.14 : 1}" stroke="${st === '2' || st === '3' ? cEm : brd}" stroke-width="${st === '2' ? 2.2 : 1.3}"/>`;
+    svg += `<text x="326" y="69" font-size="10.4" fill="${cEm}" font-weight="700">Open Desk: Top-64 Pages</text>`;
+    svg += `<text x="528" y="69" text-anchor="end" font-size="10" class="svg-strong">10.5 MiB</text>`;
+    svg += `<text x="326" y="84" font-size="8.6" fill="${txtDim}">Only 3.1% of shelf (8,192 sharp far tok)</text>`;
+    // Mini crisp page sheets on the desk
+    for (let p = 0; p < 6; p++) {
+      svg += `<rect x="${326 + p * 34}" y="94" width="28" height="26" rx="4" fill="${cEm}" fill-opacity="${st === '2' || st === '3' ? 0.30 : 0.14}" stroke="${cEm}" stroke-width="1.1"/>`;
+      svg += `<line x1="${331 + p * 34}" y1="102" x2="${349 + p * 34}" y2="102" stroke="${cEm}" stroke-width="1.4"/>`;
+      svg += `<line x1="${331 + p * 34}" y1="109" x2="${346 + p * 34}" y2="109" stroke="${cEm}" stroke-width="1.2" opacity="0.7"/>`;
+      svg += `<line x1="${331 + p * 34}" y1="115" x2="${348 + p * 34}" y2="115" stroke="${cEm}" stroke-width="1.2" opacity="0.5"/>`;
+    }
+    svg += `</g>`;
+
+    // Block 2: Index Card Catalog (52.0 MiB)
+    const idxCol = st === '3' ? cVi : cCy;
+    svg += `<g opacity="${opIdx}" ${tipAttr('Index Card Catalog (WHT-2bit-sketch)', [['RAM Size', '52.0 MiB (fits all 2,048 pages in RAM)'], ['Step 1 Role', '1.6 ms GPU scan picks Top-64 pages'], ['Step 3 Role', '1,984 summary cards fold remaining far mass (+ln 128)']])}>`;
+    svg += `<rect x="314" y="162" width="226" height="82" rx="9" fill="${st === '1' || st === '3' ? idxCol : bgSub}" fill-opacity="${st === '1' || st === '3' ? 0.14 : 1}" stroke="${st === '1' || st === '3' ? idxCol : brd}" stroke-width="${st === '1' || st === '3' ? 2.2 : 1.3}"/>`;
+    svg += `<text x="326" y="181" font-size="10.4" fill="${idxCol}" font-weight="700">Index Card Catalog</text>`;
+    svg += `<text x="528" y="181" text-anchor="end" font-size="10" class="svg-strong">52.0 MiB</text>`;
+    svg += `<text x="326" y="196" font-size="8.6" fill="${txtDim}">2,048 WHT-2bit cards + summary centroids</text>`;
+    // Visual card score bars
+    const cardHeights = [10, 25, 8, 13, 27, 9, 11, 23, 10, 14, 26, 9, 12, 22, 8, 11];
+    cardHeights.forEach((ch, idx) => {
+      const isTop = ch >= 22;
+      const barCol = st === '3' ? (isTop ? cEm : cVi) : (isTop ? cCy : brd);
+      svg += `<rect x="${326 + idx * 12.6}" y="${235 - ch}" width="9" height="${ch}" rx="2" fill="${barCol}" fill-opacity="${st === '3' && !isTop ? 0.9 : (isTop ? 0.95 : 0.55)}"/>`;
+    });
+    svg += `</g>`;
+
+    // Block 3: Query / Attention Merge (Top-Right)
+    const qCol = st === '1' ? cCy : (st === '2' ? cEm : cVi);
+    const qTitle = st === '1' ? 'Decode Query q' : (st === '2' ? 'Exact Desk Attention' : 'Final Softmax Merge');
+    const qLine1 = st === '1' ? 'Flashes 2,048 index cards' : (st === '2' ? 'Attends Top-64 sharp pages' : 'Top-64 sharp + 1K local');
+    const qLine2 = st === '1' ? 'in 1.6 ms on GPU' : (st === '2' ? 'in full WHT-K3V2 detail' : '+ 1,984 cards (+ln 128)');
+    svg += `<g opacity="${opQuery}" ${tipAttr(qTitle, [['Step', 'Step ' + st + ' of 3'], ['Accuracy', 'KL 0.0181 · 16/16 exact argmax']])}>`;
+    svg += `<rect x="594" y="50" width="198" height="80" rx="9" fill="${qCol}" fill-opacity="0.16" stroke="${qCol}" stroke-width="2"/>`;
+    svg += `<text x="693" y="73" text-anchor="middle" font-size="11" fill="${qCol}" font-weight="700">${qTitle}</text>`;
+    svg += `<text x="693" y="94" text-anchor="middle" font-size="9.2" class="svg-strong">${qLine1}</text>`;
+    svg += `<text x="693" y="111" text-anchor="middle" font-size="9" fill="${txtDim}">${qLine2}</text>`;
+    svg += `</g>`;
+
+    // Block 4: Newest 1K Local (5.9 MiB)
+    svg += `<g opacity="${opLocal}" ${tipAttr('Newest 1K Local Buffer', [['RAM Size', '5.9 MiB'], ['Coverage', 'Always-hot newest 1,024 tokens in Full-Attn layers']])}>`;
+    svg += `<rect x="594" y="162" width="198" height="82" rx="9" fill="${st === '3' ? cAm : bgSub}" fill-opacity="${st === '3' ? 0.14 : 1}" stroke="${st === '3' ? cAm : brd}" stroke-width="${st === '3' ? 1.8 : 1.2}"/>`;
+    svg += `<text x="606" y="183" font-size="10.2" fill="${cAm}" font-weight="700">Newest 1K Local</text>`;
+    svg += `<text x="780" y="183" text-anchor="end" font-size="10" class="svg-strong">5.9 MiB</text>`;
+    svg += `<text x="606" y="204" font-size="8.8" fill="${txtDim}">Latest 1,024 tokens always</text>`;
+    svg += `<text x="606" y="220" font-size="8.8" fill="${txtDim}">hot on desk (never evicted)</text>`;
+    svg += `</g>`;
+
+    // Block 5: Tiered SWA (38.8 MiB) & Block 6: FP16 Conv (1.8 MiB)
+    svg += `<g opacity="${opSwa}" ${tipAttr('Tiered SWA Rings (40 Layers)', [['RAM Size', '38.8 MiB (vs 165 MiB FP16)'], ['Layout', 'Inner 256 tok int8 + Outer 768 tok WHT-K3V2']])}>`;
+    svg += `<rect x="314" y="258" width="298" height="60" rx="9" fill="${bgSub}" stroke="${brd}" stroke-width="1.2"/>`;
+    svg += `<text x="326" y="279" font-size="10.2" fill="${cAm}" font-weight="700">Tiered SWA (40/48 Layers)</text>`;
+    svg += `<text x="600" y="279" text-anchor="end" font-size="10" class="svg-strong">38.8 MiB</text>`;
+    svg += `<text x="326" y="299" font-size="8.8" fill="${txtDim}">Inner 256 tok (i8) + Outer 768 tok (WHT-K3V2)</text>`;
+    svg += `</g>`;
+
+    svg += `<g opacity="${opSwa}" ${tipAttr('FP16 Conv State (48 Rings)', [['RAM Size', '1.8 MiB (2× smaller than FP32)'], ['Precision', 'rel_L2 = 0.000098']])}>`;
+    svg += `<rect x="624" y="258" width="168" height="60" rx="9" fill="${bgSub}" stroke="${brd}" stroke-width="1.2"/>`;
+    svg += `<text x="636" y="279" font-size="10.2" fill="${cEm}" font-weight="700">FP16 Conv</text>`;
+    svg += `<text x="780" y="279" text-anchor="end" font-size="10" class="svg-strong">1.8 MiB</text>`;
+    svg += `<text x="636" y="299" font-size="8.8" fill="${txtDim}">48 short-conv rings</text>`;
+    svg += `</g>`;
+
+    // ===== DYNAMIC STEP ARROWS (ZERO OVERLAPS) =====
+    if (st === '1') {
+      // Query -> Index Card Catalog through clean open corridor x=567, y=130..162
+      svg += `<path d="M 594 106 L 567 106 L 567 202 L 543 202" fill="none" stroke="${cCy}" stroke-width="2.6" marker-end="url(#exp3ArrCy)"/>`;
+      svg += `<rect x="524" y="135" width="86" height="22" rx="6" fill="${bgEl}" stroke="${cCy}" stroke-width="1.3"/>`;
+      svg += `<text x="567" y="150" text-anchor="middle" font-size="9.2" fill="${cCy}" font-weight="700">1.6 ms scan</text>`;
+    } else if (st === '2') {
+      // NVMe Shelf -> Open Desk (straight across x=230..314)
+      svg += `<line x1="230" y1="90" x2="311" y2="90" stroke="${cEm}" stroke-width="3" marker-end="url(#exp3ArrEm)"/>`;
+      svg += `<rect x="236" y="63" width="58" height="20" rx="5" fill="${bgEl}" stroke="${cEm}" stroke-width="1.3"/>`;
+      svg += `<text x="265" y="76" text-anchor="middle" font-size="8.8" fill="${cEm}" font-weight="700">Top-64</text>`;
+      svg += `<text x="265" y="107" text-anchor="middle" font-size="8.2" fill="${cEm}">3.1% read</text>`;
+      // Open Desk -> Attention box
+      svg += `<line x1="540" y1="90" x2="591" y2="90" stroke="${cEm}" stroke-width="2.2" stroke-dasharray="4,3" marker-end="url(#exp3ArrEm)"/>`;
+    } else {
+      // Step 3: Three clean arrows converge into Final Softmax Merge!
+      svg += `<line x1="540" y1="80" x2="591" y2="80" stroke="${cEm}" stroke-width="2.5" marker-end="url(#exp3ArrEm)"/>`;
+      svg += `<path d="M 540 202 L 567 202 L 567 108 L 591 108" fill="none" stroke="${cVi}" stroke-width="2.6" marker-end="url(#exp3ArrVi)"/>`;
+      svg += `<rect x="537" y="135" width="60" height="22" rx="6" fill="${bgEl}" stroke="${cVi}" stroke-width="1.4"/>`;
+      svg += `<text x="567" y="150" text-anchor="middle" font-size="9.2" fill="${cVi}" font-weight="700">+ln 128</text>`;
+      svg += `<line x1="693" y1="162" x2="693" y2="133" stroke="${cAm}" stroke-width="2.4" marker-end="url(#exp3ArrAm)"/>`;
+    }
+
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+
+    if (st === '1') {
+      bannerEl.style.borderLeftColor = cCy;
+      bannerEl.innerHTML = `<span><strong>Step 1 — Scan the Index Card Catalog:</strong> The decode query scores all <strong>2,048 compressed pages</strong> in RAM via <code>WHT-2bit-sketch</code> in just <strong>1.6 ms</strong>, pinpointing the Top-64 sharpest pages without touching NVMe.</span>`;
+    } else if (st === '2') {
+      bannerEl.style.borderLeftColor = cEm;
+      bannerEl.innerHTML = `<span><strong>Step 2 — Pull Top-64 Sharp Pages to Desk:</strong> Only the winning <strong>64 pages (3.1% of 2,048)</strong> load from the <code>1.34 GiB</code> NVMe shelf into the <code>10.5 MiB</code> Open Desk—giving exact <code>WHT-K3V2</code> detail on the 8,192 most relevant far tokens.</span>`;
+    } else {
+      bannerEl.style.borderLeftColor = cVi;
+      bannerEl.innerHTML = `<span><strong>Step 3 — Fold Remaining 1,984 Pages:</strong> Unselected pages aren't dropped—their <strong>1,984 summary cards</strong> fold straight into softmax with a <strong><code>+ln(128)</code></strong> log-count weight alongside the Top-64 sharp pages and 1K local tail (<code>KL 0.0181</code>, <code>16/16</code>).</span>`;
+    }
+
+    statsEl.innerHTML = `
+      <div class="metric-mini"><div class="m-lbl">RAM Working Set</div><div class="m-num" style="color:var(--cyan)">109.0 MiB</div><div class="m-sub">52 + 10.5 + 5.9 + 38.8 + 1.8</div></div>
+      <div class="metric-mini"><div class="m-lbl">NVMe Shelf</div><div class="m-num">1.34 GiB</div><div class="m-sub">2,048 pages · F_NOCACHE</div></div>
+      <div class="metric-mini"><div class="m-lbl">Active Step Focus</div><div class="m-num" style="color:${st==='1'?'var(--cyan)':st==='2'?'var(--emerald)':'var(--violet)'}">${st==='1'?'1.6 ms Scan':st==='2'?'Top-64 Pull':'1,984 Fold'}</div><div class="m-sub">${st==='1'?'2,048 WHT-2bit cards':st==='2'?'3.1% of shelf fetched':'Summary cards + ln(128)'}</div></div>
+      <div class="metric-mini"><div class="m-lbl">End-to-End Fidelity</div><div class="m-num" style="color:var(--emerald)">KL 0.0181</div><div class="m-sub">16/16 exact argmax vs FP16</div></div>
+    `;
+  }
+  document.querySelectorAll('#exp3Steps .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#exp3Steps .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeExp3Step = btn.dataset.step;
+      renderExplainer3();
+    });
+  });
+
+  // EXPLAINER #4: Three Scenarios, One Compressed Page Format (Architecture Map)
+  let activeExp4Focus = 'all';
+  function renderExplainer4() {
+    const el = document.getElementById('explainer4Map');
+    const bannerEl = document.getElementById('explainer4Banner');
+    if (!el) return;
+
+    const foc = activeExp4Focus;
+    const W = 820, H = 362;
+    const cCy = cssVar('--cyan'), cEm = cssVar('--emerald'), cAm = cssVar('--amber');
+    const cVi = cssVar('--violet');
+    const bgEl = cssVar('--bg-elev'), bgSub = cssVar('--bg-subtle'), brd = cssVar('--border-hi'), txtDim = cssVar('--text-dim');
+
+    const opOf = k => (foc === 'all' || foc === k) ? 1.0 : 0.34;
+    const hiOf = k => foc === k;
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}">
+      <defs>
+        <marker id="exp4ArrCy" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 10 5 L 0 9 z" fill="${cCy}"/>
+        </marker>
+        <marker id="exp4ArrVi" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 10 5 L 0 9 z" fill="${cVi}"/>
+        </marker>
+        <marker id="exp4ArrEm" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 10 5 L 0 9 z" fill="${cEm}"/>
+        </marker>
+      </defs>`;
+
+    // ===== CENTRAL SHARED PRIMITIVE HUB =====
+    svg += `<rect x="96" y="12" width="628" height="114" rx="12" fill="${bgEl}" stroke="${cCy}" stroke-width="1.8"/>`;
+    svg += `<text x="410" y="34" text-anchor="middle" font-size="11.5" class="svg-strong">ONE SHARED PAGE PRIMITIVE · ZERO-ROPE PURE CONTENT (128 TOK / PAGE)</text>`;
+
+    const prims = [
+      { x: 114, w: 186, t: 'DC_mean (μ)', s1: '16 KiB / 64 heads', s2: 'Free −49.6% key energy', c: cAm },
+      { x: 317, w: 186, t: 'WHT-K3V2 Payload', s1: '5.25 KiB / tok (6.1×↓)', s2: '7-op Hadamard + Lloyd-Max', c: cCy },
+      { x: 520, w: 186, t: 'WHT-2bit-sketch', s1: '52 MiB @ 256K', s2: '1.6 ms scan + summary cards', c: cVi }
+    ];
+    prims.forEach(p => {
+      svg += `<g ${tipAttr('Shared Primitive · ' + p.t, [['Footprint', p.s1], ['Role', p.s2], ['Used By', 'All 3 scenarios identically']])}>`;
+      svg += `<rect x="${p.x}" y="46" width="${p.w}" height="66" rx="8" fill="${p.c}" fill-opacity="0.13" stroke="${p.c}" stroke-width="1.3"/>`;
+      svg += `<text x="${p.x + p.w/2}" y="67" text-anchor="middle" font-size="10.5" fill="${p.c}" font-weight="700">${p.t}</text>`;
+      svg += `<text x="${p.x + p.w/2}" y="85" text-anchor="middle" font-size="9" class="svg-strong">${p.s1}</text>`;
+      svg += `<text x="${p.x + p.w/2}" y="100" text-anchor="middle" font-size="8.5" fill="${txtDim}">${p.s2}</text>`;
+      svg += `</g>`;
+    });
+
+    // ===== RADIATING BRANCHES =====
+    // Branch 1 -> Single Agent
+    svg += `<g opacity="${opOf('single')}">`;
+    svg += `<path d="M 275 126 C 275 162, 140 150, 140 190" fill="none" stroke="${cCy}" stroke-width="${hiOf('single') ? 3 : 2.2}" marker-end="url(#exp4ArrCy)"/>`;
+    svg += `<rect x="132" y="144" width="124" height="20" rx="10" fill="${bgEl}" stroke="${cCy}" stroke-width="1.2"/>`;
+    svg += `<text x="194" y="157" text-anchor="middle" font-size="8.8" fill="${cCy}" font-weight="700">Stream Top-64 pages</text>`;
+    svg += `</g>`;
+
+    // Branch 2 -> Multi-Agent Swarm
+    svg += `<g opacity="${opOf('swarm')}">`;
+    svg += `<line x1="410" y1="126" x2="410" y2="190" stroke="${cVi}" stroke-width="${hiOf('swarm') ? 3 : 2.2}" marker-end="url(#exp4ArrVi)"/>`;
+    svg += `<rect x="344" y="144" width="132" height="20" rx="10" fill="${bgEl}" stroke="${cVi}" stroke-width="1.2"/>`;
+    svg += `<text x="410" y="157" text-anchor="middle" font-size="8.8" fill="${cVi}" font-weight="700">Share Master + diffs</text>`;
+    svg += `</g>`;
+
+    // Branch 3 -> Pre-Processed .ikv
+    svg += `<g opacity="${opOf('ikv')}">`;
+    svg += `<path d="M 545 126 C 545 162, 680 150, 680 190" fill="none" stroke="${cEm}" stroke-width="${hiOf('ikv') ? 3 : 2.2}" marker-end="url(#exp4ArrEm)"/>`;
+    svg += `<rect x="556" y="144" width="144" height="20" rx="10" fill="${bgEl}" stroke="${cEm}" stroke-width="1.2"/>`;
+    svg += `<text x="628" y="157" text-anchor="middle" font-size="8.8" fill="${cEm}" font-weight="700">Save once · Mount anywhere</text>`;
+    svg += `</g>`;
+
+    // ===== 3 SCENARIO CARDS =====
+    const cards = [
+      {
+        id: 'single', x: 14, c: cCy,
+        tag: 'SCENARIO 1 · SINGLE AGENT',
+        big: '256K in 109 MiB',
+        sub: '76.7× smaller than 8.16 GiB FP16',
+        b1: '• 2,048 cold pages on NVMe (1.34 GiB)',
+        b2: '• 52M catalog + 16.4M desk + 38.8M SWA',
+        b3: '• Live 48L KL 0.0181 · 16/16 argmax'
+      },
+      {
+        id: 'swarm', x: 285, c: cVi,
+        tag: 'SCENARIO 2 · MULTI-AGENT SWARM',
+        big: '96–128+ Live Agents',
+        sub: '10.45 GiB indep · 6.37 GiB radix',
+        b1: '• TokenDance + KVCOMM (64×–256×)',
+        b2: '• 1.28× faster fused L2/SLC GPU attn',
+        b3: '• 12–15 ms F_NOCACHE wave-swap'
+      },
+      {
+        id: 'ikv', x: 556, c: cEm,
+        tag: 'SCENARIO 3 · PRE-PROCESSED .ikv',
+        big: '38.2× Instant Reads',
+        sub: '50.3K tokens in 0.80 s vs 30.53 s',
+        b1: '• Compile source once → 4 KiB .ikv',
+        b2: '• Zero-RoPE drop-in at any offset',
+        b3: '• 6/6 verbatim facts up to 47.5K back'
+      }
+    ];
+    cards.forEach(cd => {
+      const isHi = hiOf(cd.id);
+      svg += `<g class="exp4-card" data-focus="${cd.id}" opacity="${opOf(cd.id)}" style="cursor:pointer" ${tipAttr(cd.tag, [['Headline', cd.big], ['Detail', cd.sub], ['Click', 'Highlight this scenario path']])}>`;
+      svg += `<rect x="${cd.x}" y="194" width="250" height="156" rx="11" fill="${bgEl}" stroke="${cd.c}" stroke-width="${isHi ? 2.4 : 1.5}"/>`;
+      svg += `<rect x="${cd.x}" y="194" width="250" height="28" rx="10" fill="${cd.c}" fill-opacity="0.16"/>`;
+      svg += `<text x="${cd.x + 125}" y="212" text-anchor="middle" font-size="9.5" fill="${cd.c}" font-weight="700">${cd.tag}</text>`;
+      svg += `<text x="${cd.x + 125}" y="244" text-anchor="middle" font-size="14.5" fill="${cd.c}" font-weight="700">${cd.big}</text>`;
+      svg += `<text x="${cd.x + 125}" y="262" text-anchor="middle" font-size="9.2" class="svg-strong">${cd.sub}</text>`;
+      svg += `<line x1="${cd.x + 16}" y1="274" x2="${cd.x + 234}" y2="274" stroke="${cssVar('--border')}" stroke-width="1"/>`;
+      svg += `<text x="${cd.x + 16}" y="294" font-size="8.8" fill="${txtDim}">${cd.b1}</text>`;
+      svg += `<text x="${cd.x + 16}" y="314" font-size="8.8" fill="${txtDim}">${cd.b2}</text>`;
+      svg += `<text x="${cd.x + 16}" y="334" font-size="8.8" fill="${txtDim}">${cd.b3}</text>`;
+      svg += `</g>`;
+    });
+
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+
+    el.querySelectorAll('.exp4-card').forEach(node => {
+      node.addEventListener('click', () => {
+        const next = node.getAttribute('data-focus');
+        activeExp4Focus = activeExp4Focus === next ? 'all' : next;
+        document.querySelectorAll('#exp4Focus .seg-btn').forEach(b => b.classList.toggle('active', b.dataset.focus === activeExp4Focus));
+        renderExplainer4();
+      });
+    });
+
+    if (foc === 'single') {
+      bannerEl.style.borderLeftColor = cCy;
+      bannerEl.innerHTML = `<span><strong>Single Agent (256K in 109 MiB):</strong> Keeps 2,048 compressed pages on NVMe, scans the 52 MiB index catalog in 1.6 ms, pulls only Top-64 pages to RAM, and folds the rest via summary cards.</span><a class="jump-link" href="#act5">Jump to Act 5 →</a>`;
+    } else if (foc === 'swarm') {
+      bannerEl.style.borderLeftColor = cVi;
+      bannerEl.innerHTML = `<span><strong>Multi-Agent Swarm (96–128+ Live):</strong> 96 independent 256K agents fit in 10.45 GiB; agents reading shared repos share one Master pool via TokenDance + KVCOMM (1.28× faster GPU attn) and wave-swap in 12–15 ms.</span><a class="jump-link" href="#act4">Jump to Act 4 →</a>`;
+    } else if (foc === 'ikv') {
+      bannerEl.style.borderLeftColor = cEm;
+      bannerEl.innerHTML = `<span><strong>Pre-Processed Files (.ikv):</strong> Writes the exact same compressed page primitive to a 4 KiB-aligned file on disk—letting any coding agent mount 50.3K tokens in 0.80 s (38.2× faster) with zero re-rotation.</span><a class="jump-link" href="#act6">Jump to Act 6 →</a>`;
+    } else {
+      bannerEl.style.borderLeftColor = cCy;
+      bannerEl.innerHTML = `<span><strong>One format, zero glue code:</strong> Because <code>WHT-K3V2</code> + <code>WHT-2bit-sketch</code> + <code>DC_mean</code> stores position-free Zero-RoPE pages, the exact same bytes stream off disk for 1 agent, share across 128 agents, or ship as reusable <code>.ikv</code> cartridges.</span><a class="jump-link" href="#act5">Explore Live 256K →</a>`;
+    }
+  }
+  document.querySelectorAll('#exp4Focus .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#exp4Focus .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeExp4Focus = btn.dataset.focus;
+      renderExplainer4();
+    });
+  });
+
+  // ==================== ACT 7: 25-TASK GRADED BENCHMARK ====================
+  const ACT7_CATS = [
+    { name: 'Single-Hop Code', short: 'Single-Hop', total: 5, fp16: 5, k3v2: 5, sparse: 5, kv4: 5 },
+    { name: 'Multi-Hop Code', short: 'Multi-Hop', total: 5, fp16: 5, k3v2: 5, sparse: 5, kv4: 5 },
+    { name: 'Code Logic', short: 'Code Logic', total: 5, fp16: 5, k3v2: 4, sparse: 4, kv4: 4 },
+    { name: 'RULER Multi-Needle', short: 'RULER Multi', total: 5, fp16: 5, k3v2: 3, sparse: 3, kv4: 3 },
+    { name: 'RULER Var-Track', short: 'RULER 4-Hop', total: 5, fp16: 1, k3v2: 0, sparse: 0, kv4: 0 }
+  ];
+
+  const ACT7_SUITES = [
+    {
+      name: 'Suite A+C · Real Codebase',
+      sub: '5 Rust files · 34,452 tok',
+      rawMs: 19589.4, k3v2Ms: 689.2, kv4Ms: 652.6,
+      speedup: '28.4× TTFT (39.8× prefill)',
+      disk: '323.0 MiB (5.86× vs FP16)',
+      sparse: '48/522 far pages (9.2%)'
+    },
+    {
+      name: 'Suite B · RULER Logs',
+      sub: '3 log files · 14,656 tok',
+      rawMs: 8413.4, k3v2Ms: 447.6, kv4Ms: 448.0,
+      speedup: '18.8× TTFT (27.8× prefill)',
+      disk: '162.1 MiB (5.84× vs FP16)',
+      sparse: '26/213 far pages (12.2%)'
+    }
+  ];
+
+  const ACT7_TASKS = [
+    { id:'A01', cat:'Single-Hop Code', suite:'code', dist:'34,280 tok', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'T_Q4_K is 12, and type_block(T_Q4_K) returns (144, 256).',
+      k3v2A:'T_Q4_K is 12, and type_block(T_Q4_K) returns (144, 256).',
+      sparseA:'T_Q4_K is 12; type_block(T_Q4_K) returns (144, 256).' },
+    { id:'A02', cat:'Single-Hop Code', suite:'code', dist:'30.6K–31.3K', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'MTLMathMode::Fast, MTLLanguageVersion::Version4_0, MTLDispatchType::Concurrent',
+      k3v2A:'MTLMathMode::Fast, MTLLanguageVersion::Version4_0, MTLDispatchType::Concurrent',
+      sparseA:'MTLMathMode::Fast, MTLLanguageVersion::Version4_0, MTLDispatchType::Concurrent' },
+    { id:'A03', cat:'Single-Hop Code', suite:'code', dist:'28.6K–28.8K', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'2, `release_batch()`', k3v2A:'2; `release_batch`', sparseA:'2, `release_batch()`' },
+    { id:'A04', cat:'Single-Hop Code', suite:'code', dist:'22.7K–24.3K', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'The magic is `b"ILOR0001"`. `hlen` is read as a little-endian `u32` from `raw[8..12]`, and `data_start = 12 + hlen`. Max ranks: 16 / 8.',
+      k3v2A:'The exact 8-byte magic header string checked on `raw[0..8]` is `b"ILOR0001"`. `data_start` is computed as `12 + hlen`... Max ranks: 16 / 8.',
+      sparseA:'The magic header is `b"ILOR0001"`. `data_start` is computed as `12 + hlen`, where `hlen` is the little-endian u32 read from `raw[8..12]`...' },
+    { id:'A05', cat:'Single-Hop Code', suite:'code', dist:'24,853 tok', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'- 0: attn (k/v/attn sconv) - 1: mlp (mlp sconv) - 2: global (attn_res, msg_query) Field name: `pb_off`',
+      k3v2A:'- 0 = attn (k/v/attn sconv) - 1 = mlp (mlp sconv) - 2 = global (attn_res, msg_query) Field name: `pb_off`',
+      sparseA:'- kind 0: attn (k/v/attn sconv) - kind 1: mlp (mlp sconv) - kind 2: global (attn_res, msg_query) Field name: `pb_off`' },
+    { id:'A06', cat:'Multi-Hop Code', suite:'code', dist:'30.8K–32.7K', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'(1) 16384 bytes. (2) `Gpu::buffer_nocopy`, passing `MTLResourceOptions::StorageModeShared`.',
+      k3v2A:'(1) 16384 bytes. (2) `Gpu::buffer_nocopy`, passing `MTLResourceOptions::StorageModeShared`.',
+      sparseA:'(1) 16384 bytes (`let page = 16384usize;`). (2) `Gpu::buffer_nocopy`, which passes `MTLResourceOptions::StorageModeShared`.' },
+    { id:'A07', cat:'Multi-Hop Code', suite:'code', dist:'24.0K–34.3K', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'(1) Q6_K is type ID 14, with `(210, 256)` bytes/elements per block. (2) The defaults are `2.0` for both `linear_scale` and `moe_scale`.',
+      k3v2A:'(1) Q6_K is type ID 14, with (210 bytes per block, 256 elements per block). (2) Both linear_scale and moe_scale default to 2.0 when omitted.',
+      sparseA:'(1) Q6_K is type ID 14, with block tuple (210, 256). (2) Both linear_scale and moe_scale default to 2.0.' },
+    { id:'A08', cat:'Multi-Hop Code', suite:'code', dist:'15.0K–30.2K', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'(1) `dispatch_indirect`; (2) `encode_moe_gu_pf_lora`, on `eng.act_buf()`.',
+      k3v2A:'(1) `dispatch_indirect`; (2) `encode_moe_gu_pf_lora`, on `eng.act_buf()`.',
+      sparseA:'(1) `dispatch_indirect`; (2) `encode_moe_gu_pf_lora`, on `eng.act_buf()`.' },
+    { id:'A09', cat:'Multi-Hop Code', suite:'code', dist:'4.8K–29.6K', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'(1) `Session::resume`. (2) `bkey == pcache.blend_key`, `!pcache.toks.is_empty()`, `toks.len() > pcache.toks.len()`, and `toks.starts_with(&pcache.toks)`.',
+      k3v2A:'(1) `Session::resume`. (2) `bkey == pcache.blend_key`, `!pcache.toks.is_empty()`, `toks.len() > pcache.toks.len()`, and `toks.starts_with(&pcache.toks)`.',
+      sparseA:'(1) `Session::resume`. (2) `bkey == pcache.blend_key`, `!pcache.toks.is_empty()`, `toks.len() > pcache.toks.len()`, and `toks.starts_with(&pcache.toks)`.' },
+    { id:'A10', cat:'Multi-Hop Code', suite:'code', dist:'29.4K–33.8K', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'(1) `self.ne[0] / be as u64 * bs as u64` (where `(bs, be) = type_block(self.ty)`); (2) `commandBufferWithUnretainedReferences()`; (3) `tier_leave`.',
+      k3v2A:'(1) `self.ne[0] / be as u64 * bs as u64` (i.e. `ne[0] / elements_per_block * bytes_per_block`). (2) `commandBufferWithUnretainedReferences()`; (3) `tier_leave`.',
+      sparseA:'(1) `self.ne[0] / be as u64 * bs as u64` (using `type_block(self.ty)`); (2) `commandBufferWithUnretainedReferences()`; (3) `tier_leave`.' },
+    { id:'C01', cat:'Code Logic', suite:'code', dist:'32.1K–32.4K', fp16:true, k3v2:false, sparse:false, kv4:false,
+      fp16A:'Default alignment is 32. `data_off` is computed as `(r.p as u64).div_ceil(align) * align`. Each tensor\'s `file_off` is increased by `data_off` (`+=`).',
+      k3v2A:'The default alignment is 32. `data_off` is computed as `(r.p as u64).div_ceil(align) * align`. Each tensor\'s `file_off` is adjusted by adding `data_off` (missed literal `+=` grader rule).',
+      sparseA:'Default alignment is 32. `data_off` is computed as `(r.p as u64).div_ceil(align) * align`. Each tensor\'s `file_off` is increased by `data_off` (missed literal `+=` grader rule).' },
+    { id:'C02', cat:'Code Logic', suite:'code', dist:'30.8K–31.4K', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'(1) `Gpu::pso` uses `self.psos.borrow()` to read and `borrow_mut()` to insert via `RefCell`. (2) `buffer_nocopy` passes `None` deallocator because `Drop` calls `munmap`.',
+      k3v2A:'(1) `Gpu::pso` uses `self.psos.borrow()` / `borrow_mut()` via `RefCell`. (2) `buffer_nocopy` passes `None` because mmap memory is owned externally.',
+      sparseA:'(1) `Gpu::pso` uses `self.psos.borrow()` / `borrow_mut()` via `RefCell<HashMap<String, Pso>>`. (2) `None` deallocator because `Gguf` owns the mmap.' },
+    { id:'C03', cat:'Code Logic', suite:'code', dist:'28.2K–29.9K', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'The `pending` field holds a sampled token not yet fed through the model; prepended to next `prefill()`, draining `cb2` via `waitUntilCompleted` and clearing `pending = None`.',
+      k3v2A:'The `pending` field holds a sampled token not yet fed through the model; prepended to next `prefill()`, draining `cb2` via `waitUntilCompleted` and setting `pending = None`.',
+      sparseA:'The `pending` field holds a sampled token not yet fed through the model; prepended to next `prefill()`, draining `cb2` (`waitUntilCompleted`, `pending = None`).' },
+    { id:'C04', cat:'Code Logic', suite:'code', dist:'19.4K–19.8K', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'(1) mix clamped to [0.0, 1.0], strength to [0.0, 3.0]. (2) w0 = strength * (1.0 - mix), w1 = strength * mix. (3) kind==2 ablated to (0.0, 0.0).',
+      k3v2A:'(1) mix clamped to [0.0, 1.0]; strength clamped to [0.0, 3.0]. (2) w0 = strength * (1.0 - mix), w1 = strength * mix. (3) kind==2 returns (0.0, 0.0).',
+      sparseA:'(1) `mix` clamped to `[0.0, 1.0]` and `strength` to `[0.0, 3.0]`. (2) `w0 = strength * (1.0 - mix)`, `w1 = strength * mix`. (3) kind==2 returns `(0.0, 0.0)`.' },
+    { id:'C05', cat:'Code Logic', suite:'code', dist:'7.9K–11.2K', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'(1) Replaces literal special tokens with zero-width-space `<\\u{200b}|...>` variant. (2) `check_local_headers` rejects non-local Origin/Host with HTTP 403.',
+      k3v2A:'(1) Replaces known literal special tokens with zero-width-space `\\u{200b}` variant. (2) `check_local_headers` returns HTTP 403.',
+      sparseA:'(1) Replaces literal special tokens with `<\\u{200b}|...>` zero-width-space variant. (2) `check_local_headers` rejects with HTTP 403.' },
+    { id:'B01', cat:'RULER Var-Track', suite:'ruler', dist:'4.3K–13.7K', fp16:true, k3v2:false, sparse:false, kv4:false,
+      fp16A:'TITAN-KESTREL-841 (Expected: TITAN-KESTREL-841)',
+      k3v2A:'ROUTE_DRACO_03 (stopped 1 hop into 4-hop chain at effort=0)',
+      sparseA:'COBALT-FJORD-293 (wrong chain at effort=0)' },
+    { id:'B02', cat:'RULER Var-Track', suite:'ruler', dist:'3.9K–13.0K', fp16:false, k3v2:false, sparse:false, kv4:false,
+      fp16A:'TITAN-KESTREL-841 (Expected: COBALT-FJORD-293 — no-CoT ceiling)',
+      k3v2A:'PROXY_ZENITH_22 (Expected: COBALT-FJORD-293)',
+      sparseA:'TITAN-KESTREL-841 (Expected: COBALT-FJORD-293)' },
+    { id:'B03', cat:'RULER Var-Track', suite:'ruler', dist:'3.9K–12.3K', fp16:false, k3v2:false, sparse:false, kv4:false,
+      fp16A:'TITAN-KESTREL-841 (Expected: QUARTZ-VORTEX-617 — no-CoT ceiling)',
+      k3v2A:'TITAN-KESTREL-841 (Expected: QUARTZ-VORTEX-617)',
+      sparseA:'COBALT-FJORD-293 (Expected: QUARTZ-VORTEX-617)' },
+    { id:'B04', cat:'RULER Var-Track', suite:'ruler', dist:'4.3K–11.4K', fp16:false, k3v2:false, sparse:false, kv4:false,
+      fp16A:'TITAN-KESTREL-841 (Expected: AMBER-PRISM-509 — no-CoT ceiling)',
+      k3v2A:'COBALT-FJORD-293 (Expected: AMBER-PRISM-509)',
+      sparseA:'TITAN-KESTREL-841 (Expected: AMBER-PRISM-509)' },
+    { id:'B05', cat:'RULER Var-Track', suite:'ruler', dist:'3.9K–10.7K', fp16:false, k3v2:false, sparse:false, kv4:false,
+      fp16A:'TITAN-KESTREL-841 (Expected: ONYX-SUMMIT-734 — no-CoT ceiling)',
+      k3v2A:'TITAN-KESTREL-841 (Expected: ONYX-SUMMIT-734)',
+      sparseA:'TITAN-KESTREL-841 (Expected: ONYX-SUMMIT-734)' },
+    { id:'B06', cat:'RULER Multi-Needle', suite:'ruler', dist:'4.6K–13.4K', fp16:true, k3v2:false, sparse:true, kv4:false,
+      fp16A:'NODE-A47, NODE-C19, NODE-F82, NODE-K53',
+      k3v2A:'NODE-A47, NODE-C19, NODE-W12, NODE-F82 (missed NODE-K53 in File 3; pulled WARN distractor NODE-W12)',
+      sparseA:'NODE-A47, NODE-C19, NODE-F82, NODE-K53 (PASS at 12.2% Top-K!)' },
+    { id:'B07', cat:'RULER Multi-Needle', suite:'ruler', dist:'4.2K–12.7K', fp16:true, k3v2:true, sparse:false, kv4:true,
+      fp16A:'service=radix-router, p99_ms=318',
+      k3v2A:'kv-stitcher: 89 ms, radix-router: 318 ms → Highest p99_ms: radix-router (318 ms) (PASS)',
+      sparseA:'ingest-gateway, 142 ms (12.2% Top-K missed radix-router page)' },
+    { id:'B08', cat:'RULER Multi-Needle', suite:'ruler', dist:'4.3K–11.7K', fp16:true, k3v2:false, sparse:false, kv4:false,
+      fp16A:'PROJECT-HELIOS gpu_units: 125, 240, 185; total = 550',
+      k3v2A:'PROJECT-HELIOS gpu_units: 240, 125, 95; total = 460 (pulled PROJECT-CALYPSO 95 instead of File 3 185)',
+      sparseA:'PROJECT-HELIOS values: 125, 310, 185. Total: 620 (pulled nearby PROJECT-ZEPHYR 310 instead of 240)' },
+    { id:'B09', cat:'RULER Multi-Needle', suite:'ruler', dist:'3.9K–11.3K', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'EU-WEST-4: 19420; US-EAST-7: 24815; AP-SOUTH-2: 31608',
+      k3v2A:'EU-WEST-4: 19420; US-EAST-7: 24815; AP-SOUTH-2: 31608',
+      sparseA:'EU-WEST-4: 19420; US-EAST-7: 24815; AP-SOUTH-2: 31608' },
+    { id:'B10', cat:'RULER Multi-Needle', suite:'ruler', dist:'4.3K–12.4K', fp16:true, k3v2:true, sparse:true, kv4:true,
+      fp16A:'SUBSYS-CRYOGEN: lead_engineer="Dr. Nadia Kowalski"; firmware_ver="v4.19.7-rc3"; sha_tag="9F4C-E208"',
+      k3v2A:'SUBSYS-CRYOGEN: lead_engineer=Dr. Nadia Kowalski; firmware_ver=v4.19.7-rc3; sha_tag=9F4C-E208',
+      sparseA:'SUBSYS-CRYOGEN: lead_engineer="Dr. Nadia Kowalski"; firmware_ver="v4.19.7-rc3"; sha_tag="9F4C-E208"' }
+  ];
+
+  function renderAct7Cats() {
+    const el = document.getElementById('chartAct7Cats');
+    if (!el) return;
+    const W = 520, H = 290, padL = 38, padR = 14, padT = 36, padB = 46;
+    const pw = W - padL - padR, ph = H - padT - padB;
+    const cFp = cssVar('--text-dim'), cK3 = cssVar('--cyan'), cSp = cssVar('--violet'), cK4 = cssVar('--emerald');
+    const brd = cssVar('--border');
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    // Legend
+    const leg = [
+      { l: 'FP16 Raw (21/25)', c: cFp, x: 40 },
+      { l: 'IKV-K3V2 (17/25)', c: cK3, x: 162 },
+      { l: 'Sparse 9–12% (17/25)', c: cSp, x: 280 },
+      { l: 'IKV-KV4 (17/25)', c: cK4, x: 416 }
+    ];
+    leg.forEach(g => {
+      svg += `<rect x="${g.x}" y="10" width="9" height="9" rx="2" fill="${g.c}"/>`;
+      svg += `<text x="${g.x + 13}" y="18" font-size="8.6">${g.l}</text>`;
+    });
+
+    // Horizontal gridlines (0..5)
+    for (let v = 0; v <= 5; v++) {
+      const y = padT + ph - (v / 5) * ph;
+      svg += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="${brd}" stroke-dasharray="${v===0?'':'3,3'}"/>`;
+      svg += `<text x="${padL - 8}" y="${y + 3}" text-anchor="end" font-size="9">${v}/5</text>`;
+    }
+
+    const gw = pw / ACT7_CATS.length;
+    const bw = 15, gap = 3;
+    ACT7_CATS.forEach((cat, i) => {
+      const cx = padL + i * gw + gw / 2;
+      const startX = cx - (4 * bw + 3 * gap) / 2;
+      const vals = [
+        { k: 'FP16 Raw', v: cat.fp16, c: cFp },
+        { k: 'IKV-K3V2 (seam=0)', v: cat.k3v2, c: cK3 },
+        { k: 'Kv256k-Sparse', v: cat.sparse, c: cSp },
+        { k: 'IKV-KV4 (seam=0)', v: cat.kv4, c: cK4 }
+      ];
+      vals.forEach((m, j) => {
+        const bh = (m.v / 5) * ph;
+        const bx = startX + j * (bw + gap);
+        const by = padT + ph - bh;
+        const hVis = Math.max(2, bh);
+        const yVis = m.v === 0 ? padT + ph - 2 : by;
+        svg += `<rect x="${bx}" y="${yVis}" width="${bw}" height="${hVis}" rx="3" fill="${m.c}" fill-opacity="${m.v===0?0.35:0.88}" ${tipAttr(cat.name + ' · ' + m.k, [['Score', m.v + ' / ' + cat.total + ' (' + (m.v*20) + '%)']])}/>`;
+        if (m.v > 0) {
+          svg += `<text x="${bx + bw/2}" y="${by - 4}" text-anchor="middle" font-size="8.2" class="svg-strong">${m.v}</text>`;
+        }
+      });
+      svg += `<text x="${cx}" y="${H - 22}" text-anchor="middle" font-size="9.2" class="svg-strong">${cat.short}</text>`;
+      svg += `<text x="${cx}" y="${H - 9}" text-anchor="middle" font-size="8">${i < 3 ? 'Real Code' : 'Synthetic'}</text>`;
+    });
+
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+
+  function renderAct7Ttft() {
+    const el = document.getElementById('chartAct7Ttft');
+    if (!el) return;
+    const W = 520, H = 290, padL = 136, padR = 78, padT = 22;
+    const bwMax = W - padL - padR;
+    const cRo = cssVar('--rose'), cCy = cssVar('--cyan'), cEm = cssVar('--emerald');
+    const bgSub = cssVar('--bg-subtle'), brd = cssVar('--border');
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    ACT7_SUITES.forEach((s, si) => {
+      const y0 = padT + si * 134;
+      svg += `<text x="10" y="${y0 + 10}" font-size="10.5" class="svg-strong">${s.name}</text>`;
+      svg += `<text x="10" y="${y0 + 24}" font-size="8.6">${s.sub} · ${s.disk}</text>`;
+      svg += `<rect x="${W - 178}" y="${y0 - 2}" width="170" height="22" rx="11" fill="${cEm}" fill-opacity="0.16" stroke="${cEm}" stroke-width="1"/>`;
+      svg += `<text x="${W - 93}" y="${y0 + 12}" text-anchor="middle" font-size="9" fill="${cEm}" font-weight="700">${s.speedup}</text>`;
+
+      const rows = [
+        { lbl: 'FP16 Raw Prefill', ms: s.rawMs, c: cRo },
+        { lbl: 'IKV-K3V2 (seam=0)', ms: s.k3v2Ms, c: cCy },
+        { lbl: 'IKV-KV4 (seam=0)', ms: s.kv4Ms, c: cEm }
+      ];
+      rows.forEach((r, ri) => {
+        const ry = y0 + 36 + ri * 26;
+        const w = Math.max(8, (r.ms / s.rawMs) * bwMax);
+        svg += `<text x="${padL - 10}" y="${ry + 13}" text-anchor="end" font-size="9">${r.lbl}</text>`;
+        svg += `<rect x="${padL}" y="${ry}" width="${bwMax}" height="18" rx="4" fill="${bgSub}"/>`;
+        svg += `<rect x="${padL}" y="${ry}" width="${w}" height="18" rx="4" fill="${r.c}" fill-opacity="0.88" ${tipAttr(s.name + ' · ' + r.lbl, [['TTFT', (r.ms/1000).toFixed(2) + ' s (' + r.ms.toFixed(1) + ' ms)'], ['Disk', s.disk], ['Sparse Active', s.sparse]])}/>`;
+        svg += `<text x="${padL + w + 7}" y="${ry + 13}" font-size="9" class="svg-strong">${(r.ms/1000).toFixed(2)} s</text>`;
+      });
+
+      if (si === 0) {
+        svg += `<line x1="10" y1="${y0 + 122}" x2="${W - 10}" y2="${y0 + 122}" stroke="${brd}" stroke-dasharray="4,4"/>`;
+      }
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+
+  let tbCat = 'all', tbStat = 'all', tbSelectedId = 'A06';
+  function badgeOf(pass) {
+    return pass
+      ? '<span class="pill pill-emerald" style="padding:1px 7px;font-size:0.68rem">PASS</span>'
+      : '<span class="pill pill-rose" style="padding:1px 7px;font-size:0.68rem">FAIL</span>';
+  }
+  function escHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function renderDoodad7() {
+    const tbody = document.getElementById('tbTableBody');
+    const detail = document.getElementById('tbDetailBox');
+    if (!tbody || !detail) return;
+
+    const filtered = ACT7_TASKS.filter(t => {
+      if (tbCat === 'code' && t.suite !== 'code') return false;
+      if (tbCat !== 'all' && tbCat !== 'code' && t.cat !== tbCat) return false;
+      const allPass = t.fp16 && t.k3v2 && t.sparse && t.kv4;
+      const diverged = t.fp16 && !allPass;
+      if (tbStat === 'pass_all' && !allPass) return false;
+      if (tbStat === 'diverged' && !diverged) return false;
+      if (tbStat === 'fp16_fail' && t.fp16) return false;
+      return true;
+    });
+
+    if (filtered.length && !filtered.some(t => t.id === tbSelectedId)) {
+      tbSelectedId = filtered[0].id;
+    }
+
+    tbody.innerHTML = filtered.map(t => {
+      const allPass = t.fp16 && t.k3v2 && t.sparse && t.kv4;
+      const rowCls = t.id === tbSelectedId ? 'row-hi' : (!t.fp16 ? 'row-bad' : (!allPass ? 'row-warn' : ''));
+      const prev = t.k3v2A.length > 52 ? t.k3v2A.slice(0, 52) + '…' : t.k3v2A;
+      return `<tr class="${rowCls}" data-tid="${t.id}" style="cursor:pointer">
+        <td><strong>${t.id}</strong></td>
+        <td>${t.cat}</td>
+        <td class="num">${t.dist}</td>
+        <td>${badgeOf(t.fp16)}</td>
+        <td>${badgeOf(t.k3v2)}</td>
+        <td>${badgeOf(t.sparse)}</td>
+        <td>${badgeOf(t.kv4)}</td>
+        <td style="font-family:var(--font-mono);font-size:0.75rem;color:var(--text-dim)">${escHtml(prev)}</td>
+      </tr>`;
+    }).join('');
+
+    tbody.querySelectorAll('tr[data-tid]').forEach(tr => {
+      tr.addEventListener('click', () => {
+        tbSelectedId = tr.getAttribute('data-tid');
+        renderDoodad7();
+      });
+    });
+
+    const cur = ACT7_TASKS.find(t => t.id === tbSelectedId) || ACT7_TASKS[0];
+    detail.innerHTML = `
+      <div class="card" style="padding:14px 16px;background:var(--bg-elev)">
+        <div class="card-head" style="margin-bottom:8px">
+          <h4 class="card-title" style="font-size:0.95rem">Task ${cur.id} · ${cur.cat} <span style="font-family:var(--font-mono);font-size:0.78rem;color:var(--text-faint)">(${cur.dist} outside SWA)</span></h4>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <span>FP16 ${badgeOf(cur.fp16)}</span>
+            <span>K3V2 ${badgeOf(cur.k3v2)}</span>
+            <span>Sparse ${badgeOf(cur.sparse)}</span>
+            <span>KV4 ${badgeOf(cur.kv4)}</span>
+          </div>
+        </div>
+        <div class="grid-3" style="gap:10px">
+          <div class="metric-mini"><div class="m-lbl">Exact FP16 Raw Answer</div><div class="m-sub" style="color:var(--text);font-family:var(--font-mono);margin-top:6px;white-space:normal">${escHtml(cur.fp16A)}</div></div>
+          <div class="metric-mini"><div class="m-lbl">IKV-K3V2 (seam=0) Answer</div><div class="m-sub" style="color:var(--text);font-family:var(--font-mono);margin-top:6px;white-space:normal">${escHtml(cur.k3v2A)}</div></div>
+          <div class="metric-mini"><div class="m-lbl">Kv256k-Sparse (9.2–12.2%) Answer</div><div class="m-sub" style="color:var(--text);font-family:var(--font-mono);margin-top:6px;white-space:normal">${escHtml(cur.sparseA)}</div></div>
+        </div>
+      </div>
+    `;
+  }
+  document.querySelectorAll('#tbCatFilter .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#tbCatFilter .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      tbCat = btn.dataset.cat;
+      renderDoodad7();
+    });
+  });
+  document.querySelectorAll('#tbStatFilter .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#tbStatFilter .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      tbStat = btn.dataset.stat;
+      renderDoodad7();
+    });
+  });
+
   function renderAllDynamic() {
+    renderExplainer4();
     renderAct0Batch();
     renderAct0Prof();
     renderDoodad1();
+    renderExplainer1();
     renderAct1Quant();
     renderAct1Sparse();
     renderAct1DcCross();
@@ -2908,8 +4211,10 @@ footer {
     renderAct2ZipfCache();
     renderDoodad3();
     renderAct3Moe();
+    renderExplainer2();
     renderAct4Diff();
     renderAct4Fused();
+    renderExplainer3();
     renderAct5Waterfall();
     renderAct5Ablation();
     renderAct5Live();
@@ -2919,6 +4224,9 @@ footer {
     renderDoodad5();
     renderDoodad6();
     renderAct6Shadow();
+    renderAct7Cats();
+    renderAct7Ttft();
+    renderDoodad7();
   }
 
   renderAllDynamic();
