@@ -710,6 +710,12 @@ fn main() {
             let n_inst: usize = o.batch.split(',').next().unwrap().parse().unwrap_or(64);
             kv256k::run_bench_256k(&eng, &tk, n_inst, ctx, o.topk_pages, o.kv_bits, o.max_mem);
         }
+        "needle-10m" => {
+            let eng = Engine::load(&o.model, 8192);
+            let tk = Tokenizer::load(&eng.g);
+            let eff: f32 = effort_str(&o.effort).parse().unwrap_or(0.0);
+            kv256k::run_needle_1m_10m(&eng, &tk, o.topk_pages, eff);
+        }
         "kv-share-probe" => {
             let eng = Engine::load(&o.model, o.ctx);
             let tk = Tokenizer::load(&eng.g);

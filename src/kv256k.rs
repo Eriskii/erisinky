@@ -4268,3 +4268,558 @@ pub fn run_bench_256k(
              fp as f64 / (1u64 << 30) as f64, peak as f64 / (1u64 << 30) as f64,
              dr as f64 / 1048576.0, dw as f64 / 1048576.0);
 }
+
+// ----------------------------------------------------------------------------- 1M & 10M Token Needle-in-a-Haystack Stress Test
+/// Helper: prefill a chunk of tokens on `eng` (resetting first), compress `src_pos0..src_pos0 + n_toks`
+/// into newly allocated hot `WHT-K3V2` pages in `pool`, and summarize each completed page into a template `spid`.
+fn ingest_chunk_into_pool(
+    pool: &mut Kv256kPool,
+    toks_full: &[u32],
+    src_pos0: usize,
+    n_toks: usize,
+) -> Result<(Vec<u64>, Vec<u32>), String> {
+    let pt = pool.cfg.page_toks;
+    assert!(n_toks % pt == 0, "chunk n_toks must be a multiple of page_toks");
+    let n_pages = n_toks / pt;
+    let eng = pool.eng;
+
+    eng.reset();
+    eng.prepare(toks_full.len() + 4, toks_full.len().min(eng.chunk));
+    let mut p0 = 0usize;
+    while p0 < toks_full.len() {
+        let t = (toks_full.len() - p0).min(eng.chunk);
+        eng.set_tokens(p0, &toks_full[p0..p0 + t]);
+        let cb = eng.gpu.cmd();
+        eng.encode_prefill(&cb, p0, t, false, false);
+        cb.commit();
+        cb.waitUntilCompleted();
+        p0 += t;
+    }
+
+    let mut lids = Vec::with_capacity(n_pages);
+    let mut pids = Vec::with_capacity(n_pages);
+    for _ in 0..n_pages {
+        let lid = pool.radix.alloc_logical_id();
+        let pid = pool.lru.alloc_for_logical(lid, true, true, &mut pool.cold, &pool.kv_comp, &pool.kv_scales)?;
+        lids.push(lid);
+        pids.push(pid);
+    }
+
+    let mp = pool.meta[1].contents().as_ptr() as *mut u32;
+    unsafe { for (i, &p) in pids.iter().enumerate() { *mp.add(i) = p; } }
+    {
+        let cb = eng.gpu.cmd();
+        let e = Enc::new(&cb);
+        e.pso(&eng.gpu.pso("k_fp16_to_wht_compress"));
+        e.buf(&eng.kv_full.borrow(), 0, 3);
+        e.buf(&pool.kv_comp, 0, 6);
+        e.buf(&pool.meta[1], 0, 7);
+        e.buf(&pool.kv_scales, 0, 8);
+        e.buf(&pool.k_dc_mean, 0, 10);
+        for layer_slot in 0..N_SLOT {
+            let (is_swa, fi) = eng.slot_kind[layer_slot];
+            if is_swa { continue; }
+            let fa = Fp16ToWhtArgs {
+                src_cap: eng.full_cap.get() as u32,
+                src_pos0: src_pos0 as u32,
+                slot_idx: fi as u32,
+                layer_slot: layer_slot as u32,
+                pool_cap: pool.lru.hot_cap as u32,
+                page_toks: pt as u32,
+                kv_bits: pool.cfg.kv_bits,
+                dst_pos0: 0,
+                pid_list_off: 0,
+                n_toks: n_toks as u32,
+                use_dc_mean: pool.use_dc_mean as u32,
+                pad1: 0,
+            };
+            e.bytes(&fa, 5);
+            e.dispatch((n_toks, NKV, 1), 128);
+        }
+        e.end();
+        cb.commit();
+        cb.waitUntilCompleted();
+    }
+
+    let spid_off = n_pages.div_ceil(16) * 16;
+    let mut spids = Vec::with_capacity(n_pages);
+    for i in 0..n_pages {
+        let spid = pool.alloc_sum_page()?;
+        spids.push(spid);
+        unsafe {
+            *mp.add(i) = pids[i];
+            *mp.add(spid_off + i) = spid;
+        }
+    }
+    {
+        let cb = eng.gpu.cmd();
+        let e = Enc::new(&cb);
+        e.pso(&eng.gpu.pso("k_page_summarize_wht2"));
+        e.buf(&pool.kv_comp, 0, 3);
+        e.buf(&pool.kv_scales, 0, 6);
+        e.buf(&pool.meta[1], 0, 7);
+        e.buf(&pool.kv_sum, 0, 8);
+        let sa = PageSumArgs {
+            pool_cap: pool.lru.hot_cap as u32,
+            slot_idx: 0,
+            page_toks: pt as u32,
+            kv_bits: pool.cfg.kv_bits,
+            n_pages: n_pages as u32,
+            pid_list_off: 0,
+            spid_list_off: spid_off as u32,
+            cnt_list_off: u32::MAX,
+            sum_pool_cap: pool.cfg.sum_pool_pages as u32,
+            pad0: 0, pad1: 0, pad2: 0,
+        };
+        e.bytes(&sa, 5);
+        e.dispatch((n_pages, NKV, N_FULL), 128);
+        e.end();
+        cb.commit();
+        cb.waitUntilCompleted();
+    }
+    for &p in &pids { pool.lru.unpin(p); }
+    Ok((lids, spids))
+}
+
+/// Copy one `KvPageWht2` summary record across all 8 full slots from `src_spid` into a physically distinct `dst_spid`
+/// so DRAM scan benchmarks stream the full 208 MiB (1M) / 2.03 GiB (10M) catalog without L2 cache aliasing!
+fn clone_sum_page_slot(pool: &Kv256kPool, src_spid: u32, dst_spid: u32) {
+    let cap = pool.cfg.sum_pool_pages;
+    let row_bytes = NKV * KV_PAGE_WHT2_BYTES;
+    let base = pool.kv_sum.contents().as_ptr() as *mut u8;
+    for s in 0..N_FULL {
+        let src_off = (s * cap + src_spid as usize) * row_bytes;
+        let dst_off = (s * cap + dst_spid as usize) * row_bytes;
+        if src_off != dst_off {
+            unsafe { std::ptr::copy_nonoverlapping(base.add(src_off), base.add(dst_off), row_bytes); }
+        }
+    }
+}
+
+/// Extreme-Context 1M (`1,049,344` tok) & 10M (`10,486,528` tok) Needle-in-a-Haystack Benchmark.
+///
+/// Honest methodology:
+/// - Prefills 16 distinct 4,096-token real Rust source chunks (`65,536` real tokens = `512` unique 128-tok pages)
+///   + 3 real 4,096-token needle chunks (1 unique secret needle buried at the center of each) + 1 real 1,024-token tail
+///   through exact 48-layer FP16 forward passes with BOS-sink stripping, calibrating `DC_mean` & compressing to `WHT-K3V2` + `KvPageWht2`.
+/// - Populates ALL `8,198` (1M) or `81,926` (10M) physically distinct `KvPageWht2` index cards in DRAM (`208 MiB` @ 1M, `2.03 GiB` @ 10M),
+///   tiling the 512 real haystack pages and planting the 3 unique needles ONCE each at 10%, 50%, and 90% depth.
+/// - Runs genuine 48-layer `Kv256kPool` GPU decode at the TRUE `pos = 1,049,344` (1M) and `pos = 10,486,528` (10M)
+///   (scoring ALL 8,190 / 81,918 pages via `k_score_pages_wht2`, retrieving Top-K, and folding ALL remaining centroids with `+ln(128)`
+///   under Inkling's true `tau = 1 + log_alpha * log(pos / log_floor)`).
+pub fn run_needle_1m_10m(eng: &Engine, tk: &Tokenizer, top_k_pages: usize, effort: f32) {
+    let pt = 128usize;
+    let top_k = top_k_pages.clamp(16, 128);
+    let use_cot = effort > 0.0;
+    let eff_str = if use_cot { format!("{effort}") } else { "0".to_string() };
+
+    println!("==========================================================================================================");
+    println!("  INKLING-2-MINI 1M & 10M TOKEN NEEDLE-IN-A-HAYSTACK STRESS TEST (Kv256k-Sparse: WHT-K3V2 + DC + WHT2-Sketch)");
+    println!("  Top-K = {top_k} pages ({} sharp far tok) | effort={eff_str} | greedy decode | ring-exact pos alignment", top_k * pt);
+    println!("==========================================================================================================");
+
+    // 1. Gather real diverse source text for 32 unique 4K haystack chunks (131K unique tok = 1,024 unique pages) + 3 needle chunks + 1 tail chunk
+    let src_files = [
+        "/Users/eris/Documents/Programming/Projects/inkling-engine/src/engine.rs",
+        "/Users/eris/Documents/Programming/Projects/inkling-engine/src/batch.rs",
+        "/Users/eris/Documents/Programming/Projects/inkling-engine/src/kv256k.rs",
+        "/Users/eris/Documents/Programming/Projects/inkling-engine/src/persona.rs",
+        "/Users/eris/Documents/Programming/Projects/inkling-engine/src/offload.rs",
+        "/Users/eris/Documents/Programming/Projects/inkling-engine/src/kv_share.rs",
+        "/Users/eris/Documents/Programming/Projects/inkling-engine/src/kv_probe.rs",
+        "/Users/eris/Documents/Programming/Projects/inkling-engine/src/main.rs",
+        "/Users/eris/Documents/Programming/Projects/inkling-engine/src/gguf.rs",
+        "/Users/eris/Documents/Programming/Projects/inkling-engine/src/session.rs",
+        "/Users/eris/Documents/Programming/Projects/inkling-engine/src/batch_opt.metal",
+        "/Users/eris/Documents/Programming/Projects/inkling-engine/src/kernels.metal",
+        "/Users/eris/Documents/Programming/Projects/inkling-engine/src/prefill.metal",
+    ];
+    let mut corpus = String::new();
+    for path in &src_files {
+        if let Ok(s) = std::fs::read_to_string(path) {
+            corpus.push_str(&format!("\n// === FILE: {path} ===\n"));
+            corpus.push_str(&s);
+        }
+    }
+    let corpus_toks = tk.encode(&corpus, false);
+    assert!(corpus_toks.len() >= 36 * 4096 + 1024, "corpus too small ({} tok)", corpus_toks.len());
+
+    let bos_sys = format!(
+        "<|message_system|><|content_text|>You are a precise build-system assistant. \
+         Read the provided source files carefully and report the exact requested build tag strings verbatim.<|end_message|>\
+         <|message_system|><|content_text|>Thinking effort level: {eff_str}<|end_message|>\
+         <|message_user|><|content_text|>"
+    );
+    let bos_toks = tk.encode(&bos_sys, true);
+    let p_len = bos_toks.len();
+
+    struct NeedleSpec {
+        label: &'static str,
+        depth_frac: f64,
+        line: &'static str,
+        question: &'static str,
+        want_code: &'static str,
+        want_sector: &'static str,
+    }
+    let needles = [
+        NeedleSpec {
+            label: "10% depth",
+            depth_frac: 0.10,
+            line: "\n// [BUILD_TAG] release_name=MAPLE-HARBOR artifact_id=\"CRANE-7491-BETA\" region=\"PORTLAND-09\"\n",
+            question: "Find the [BUILD_TAG] comment for release_name=MAPLE-HARBOR in the source files. What is its exact artifact_id and region? Reply concisely with only those exact values.",
+            want_code: "CRANE-7491-BETA",
+            want_sector: "PORTLAND-09",
+        },
+        NeedleSpec {
+            label: "50% depth",
+            depth_frac: 0.50,
+            line: "\n// [BUILD_TAG] release_name=CEDAR-SUMMIT artifact_id=\"RIVER-3826-GAMMA\" region=\"DENVER-44\"\n",
+            question: "Find the [BUILD_TAG] comment for release_name=CEDAR-SUMMIT in the source files. What is its exact artifact_id and region? Reply concisely with only those exact values.",
+            want_code: "RIVER-3826-GAMMA",
+            want_sector: "DENVER-44",
+        },
+        NeedleSpec {
+            label: "90% depth",
+            depth_frac: 0.90,
+            line: "\n// [BUILD_TAG] release_name=BIRCH-VALLEY artifact_id=\"TIMBER-6159-ALPHA\" region=\"AUSTIN-81\"\n",
+            question: "Find the [BUILD_TAG] comment for release_name=BIRCH-VALLEY in the source files. What is its exact artifact_id and region? Reply concisely with only those exact values.",
+            want_code: "TIMBER-6159-ALPHA",
+            want_sector: "AUSTIN-81",
+        },
+    ];
+
+    // Prebuild 32 unique real haystack chunks (131K unique tok = 1,024 unique pages), 3 needle chunks, and 1,024-tok tail
+    let n_hay_chunks = 32usize;
+    let chunk_toks = 4096usize;
+    let mut hay_chunks: Vec<Vec<u32>> = Vec::with_capacity(n_hay_chunks);
+    for c in 0..n_hay_chunks {
+        let mut v = bos_toks.clone();
+        v.extend_from_slice(&corpus_toks[c * chunk_toks..(c + 1) * chunk_toks]);
+        hay_chunks.push(v);
+    }
+    let mut needle_chunks: Vec<(Vec<u32>, usize)> = Vec::with_capacity(3);
+    for (ni, nd) in needles.iter().enumerate() {
+        let base_off = (n_hay_chunks + ni) * chunk_toks;
+        let nd_toks = tk.encode(nd.line, false);
+        let half = 2048usize;
+        let mut v = bos_toks.clone();
+        v.extend_from_slice(&corpus_toks[base_off..base_off + half]);
+        v.extend_from_slice(&nd_toks);
+        let need_rest = chunk_toks - half - nd_toks.len();
+        v.extend_from_slice(&corpus_toks[base_off + half..base_off + half + need_rest]);
+        assert_eq!(v.len(), p_len + chunk_toks);
+        needle_chunks.push((v, half / pt)); // local page 16 holds the needle
+    }
+    let tail_off = (n_hay_chunks + 3) * chunk_toks;
+    let tail_toks: Vec<u32> = corpus_toks[tail_off..tail_off + EXT].to_vec();
+    assert_eq!(tail_toks.len(), EXT);
+
+    // Exact ring-aligned context targets: k * 2304 + 1024 (lcm(3, 288, 768, 128) = 2304!)
+    //   1M        = 455 * 2304 + 1024 =  1,049,344 tokens ( 8,198 pages, Top-K=64 -> 0.78% active)
+    //  10M (K=64) = 4551 * 2304 + 1024 = 10,486,528 tokens (81,926 pages, Top-K=64 -> 0.078% active)
+    //  10M (K=128)= 4551 * 2304 + 1024 = 10,486,528 tokens (81,926 pages, Top-K=128 -> 0.156% active)
+    let scales: [(&str, usize); 2] = [
+        ("1M", 455 * 2304 + EXT),
+        ("10M", 4551 * 2304 + EXT),
+    ];
+
+    for &(scale_name, target_pos) in &scales {
+        let total_pages = target_pos / pt;
+        let n_far_pages = (target_pos - EXT) / pt;
+        let max_k = top_k;
+        let sum_pool_need = total_pages + n_hay_chunks * (chunk_toks / pt) + 192;
+        let hot_pool_need = n_hay_chunks * (chunk_toks / pt) + 3 * (chunk_toks / pt) + (EXT / pt) + 32;
+
+        println!("\n==========================================================================================================");
+        println!("  PHASE {scale_name}: {target_pos} tokens ({total_pages} pages of {pt} tok | {n_far_pages} far pages)");
+        println!("  Physically distinct KvPageWht2 DRAM catalog = {:.1} MiB (vs {:.1} GiB FP16 KV!)",
+                 (total_pages * N_FULL * NKV * KV_PAGE_WHT2_BYTES) as f64 / 1048576.0,
+                 (target_pos as f64 * 32768.0) / (1u64 << 30) as f64);
+        println!("==========================================================================================================");
+
+        let cfg = Kv256kConfig {
+            max_active_batch: 1,
+            max_ctx: target_pos + 1024,
+            page_toks: pt,
+            kv_bits: 3, // WHT-K3V2
+            top_k_pages: max_k,
+            use_centroids: true,
+            use_wht2_sketch: true,
+            use_tiered_swa: true,
+            swa_inner_fp16: false,
+            use_dc_mean: true,
+            duo: DuoHeadConfig::all_retrieval(),
+            max_mem_bytes: 6usize << 30,
+            sum_pool_pages: sum_pool_need,
+            hot_full_pages: hot_pool_need,
+            chunk_cap: 0,
+        };
+        let mut pool = Kv256kPool::try_new(eng, cfg).expect("alloc Kv256kPool for 1M/10M");
+
+        // Calibrate DC_mean on real source chunk 0
+        let t_prep = Instant::now();
+        {
+            eng.reset();
+            eng.prepare(hay_chunks[0].len() + 4, hay_chunks[0].len().min(eng.chunk));
+            let mut p0 = 0usize;
+            while p0 < hay_chunks[0].len() {
+                let t = (hay_chunks[0].len() - p0).min(eng.chunk);
+                eng.set_tokens(p0, &hay_chunks[0][p0..p0 + t]);
+                let cb = eng.gpu.cmd();
+                eng.encode_prefill(&cb, p0, t, false, false);
+                cb.commit();
+                cb.waitUntilCompleted();
+                p0 += t;
+            }
+            pool.calibrate_dc_mean_from_engine(hay_chunks[0].len());
+        }
+
+        // Ingest 16 real haystack chunks (512 unique pages) + 3 real needle chunks (96 pages)
+        let mut hay_lids: Vec<u64> = Vec::with_capacity(512);
+        let mut hay_tpl_spids: Vec<u32> = Vec::with_capacity(512);
+        for chunk in &hay_chunks {
+            let (ls, ss) = ingest_chunk_into_pool(&mut pool, chunk, p_len, chunk_toks).expect("ingest hay chunk");
+            hay_lids.extend(ls);
+            hay_tpl_spids.extend(ss);
+        }
+        let mut needle_lids: Vec<Vec<u64>> = Vec::with_capacity(3);
+        let mut needle_tpl_spids: Vec<Vec<u32>> = Vec::with_capacity(3);
+        for (chunk, _) in &needle_chunks {
+            let (ls, ss) = ingest_chunk_into_pool(&mut pool, chunk, p_len, chunk_toks).expect("ingest needle chunk");
+            needle_lids.push(ls);
+            needle_tpl_spids.push(ss);
+        }
+
+        // Prefill the 1,024-token tail cleanly at pos 0..1024 and load its Tiered-SWA + FP16 CS + 8 tail full pages
+        eng.reset();
+        eng.prepare(EXT + 4, EXT);
+        eng.set_tokens(0, &tail_toks);
+        {
+            let cb = eng.gpu.cmd();
+            eng.encode_prefill(&cb, 0, EXT, false, false);
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
+        let tail_snap = eng.snapshot();
+        let mut base_tail_sess = Kv256kSession::new(0);
+        pool.load_session_from_engine(&mut base_tail_sess, EXT, tail_toks[EXT - 1]).expect("load tail");
+        let tail_lids = base_tail_sess.logical_pages.clone();
+        let tail_spids = base_tail_sess.sum_pages.clone();
+        let prep_s = t_prep.elapsed().as_secs_f64();
+
+        // Populate ALL `n_far_pages` physically distinct `kv_sum` slots in DRAM with ONLY real haystack pages first!
+        // (For each depth probe 10%/50%/90%, we swap in ONLY that single needle chunk — true single-needle NIAH!)
+        let t_pop = Instant::now();
+        let mut base_hay_lids: Vec<u64> = Vec::with_capacity(total_pages + 16);
+        let mut base_hay_spids: Vec<u32> = Vec::with_capacity(total_pages + 16);
+
+        let needle_chunk_pages = chunk_toks / pt; // 32
+        let mut needle_start_lps: [usize; 3] = [0; 3];
+        let mut needle_exact_lps: [usize; 3] = [0; 3];
+        for i in 0..3 {
+            let start = (((n_far_pages as f64) * needles[i].depth_frac) as usize)
+                .min(n_far_pages.saturating_sub(needle_chunk_pages + 1));
+            needle_start_lps[i] = start;
+            needle_exact_lps[i] = start + needle_chunks[i].1;
+        }
+
+        for lp in 0..n_far_pages {
+            let hi = lp % hay_lids.len();
+            let sp = pool.alloc_sum_page().expect("alloc sum page");
+            clone_sum_page_slot(&pool, hay_tpl_spids[hi], sp);
+            base_hay_lids.push(hay_lids[hi]);
+            base_hay_spids.push(sp);
+        }
+        // Append the 8 tail pages at `[n_far_pages .. total_pages)`
+        for k in 0..(EXT / pt) {
+            base_hay_lids.push(tail_lids[k]);
+            base_hay_spids.push(tail_spids[k]);
+        }
+        let pop_s = t_pop.elapsed().as_secs_f64();
+        let fp_after = proc_phys_footprint_bytes() as f64 / (1u64 << 30) as f64;
+        println!("  Setup: prefill+compress 35 real chunks (143K tok) = {prep_s:.1} s | populate {n_far_pages} distinct DRAM index cards = {pop_s:.2} s | phys_footprint = {fp_after:.2} GiB");
+
+        // Test both: (1) full background centroids ON (true 1M/10M softmax) and (2) pure Top-K retrieval (centroids OFF)
+        for &use_cent in &[true, false] {
+            pool.cfg.use_centroids = use_cent;
+            let cent_tag = if use_cent { "cent=ON " } else { "cent=OFF" };
+            let scale_top_k = top_k;
+            pool.cfg.top_k_pages = scale_top_k;
+            println!("  --- Testing {scale_name} @ Top-K={scale_top_k} / {n_far_pages} ({:.4}% active | {cent_tag}) ---",
+                     scale_top_k as f64 * 100.0 / n_far_pages as f64);
+            let mut passed_cnt = 0usize;
+            for (ni, nd) in needles.iter().enumerate() {
+                // Plant ONLY needle `ni` into its depth window (single-needle NIAH — zero competing identical templates!)
+                let s0 = needle_start_lps[ni];
+                let mut sess_lids = base_hay_lids.clone();
+                let sess_spids = base_hay_spids.clone();
+                for k in 0..needle_chunk_pages {
+                    sess_lids[s0 + k] = needle_lids[ni][k];
+                    clone_sum_page_slot(&pool, needle_tpl_spids[ni][k], sess_spids[s0 + k]);
+                }
+
+                // Re-init fresh session SWA + CS from `tail_snap` (ring-exact at `target_pos`!)
+                eng.restore(&tail_snap);
+            let mut qsess = Kv256kSession::new(0);
+            qsess.cs_slot = base_tail_sess.cs_slot;
+            qsess.swa_pages = base_tail_sess.swa_pages.clone();
+            qsess.swa_outer_pages = base_tail_sess.swa_outer_pages.clone();
+            // Refresh CS & SWA buffers from exact tail_snap
+            {
+                let cs_slot = qsess.cs_slot.unwrap();
+                unsafe { *(pool.meta[1].contents().as_ptr() as *mut u32) = cs_slot; }
+                let cb = eng.gpu.cmd();
+                let e = Enc::new(&cb);
+                e.pso(&eng.gpu.pso("k_broadcast_cs_hcs"));
+                e.buf(&eng.cs, 0, 4);
+                e.buf(&pool.meta[1], 0, 7);
+                e.buf(&pool.cs_pool_hcs, 0, 8);
+                let ca = CopyCsArgs { dst_off: 0, n: 1, max_batch: 1, prefix_len: target_pos as u32 };
+                e.bytes(&ca, 5);
+                e.dispatch((NCH.div_ceil(256), 1, N_SLOT), 256);
+                e.end();
+                cb.commit();
+                cb.waitUntilCompleted();
+
+                let mp = pool.meta[1].contents().as_ptr() as *mut u32;
+                unsafe {
+                    for (k, &p) in qsess.swa_pages.iter().enumerate() { *mp.add(k) = p; }
+                    for (k, &p) in qsess.swa_outer_pages.iter().enumerate() { *mp.add(16 + k) = p; }
+                }
+                let last_blk = (EXT - 1) / KV_BLK;
+                let inner_p0 = last_blk.saturating_sub(SWA_INNER_BLKS - 1) * KV_BLK;
+                let cb2 = eng.gpu.cmd();
+                let e2 = Enc::new(&cb2);
+                e2.pso(&eng.gpu.pso("k_swa_load_from_engine"));
+                e2.buf(&eng.kv_swa.borrow(), 0, 1);
+                e2.buf(&pool.swa_inner, 0, 3);
+                e2.buf(&pool.swa_inner_sc, 0, 6);
+                e2.buf(&pool.meta[1], 0, 7);
+                e2.buf(&pool.swa_outer_comp, 0, 8);
+                e2.buf(&pool.swa_outer_sc, 0, 9);
+                let la = SwaLoadEngineArgs {
+                    src_cap: eng.swa_cap.get() as u32,
+                    first_pos: 0,
+                    nkeys: EXT as u32,
+                    inner_p0: inner_p0 as u32,
+                    inner_cap: pool.swa_inner_cap as u32,
+                    outer_cap: pool.swa_outer_cap as u32,
+                    inner_fp16: 0,
+                    slot_start: 0,
+                    inner_pt_off: 0,
+                    outer_pt_off: 16,
+                    pad0: 0, pad1: 0,
+                };
+                e2.bytes(&la, 5);
+                e2.dispatch((EXT, NKV, N_SWA), 128);
+                e2.end();
+                cb2.commit();
+                cb2.waitUntilCompleted();
+            }
+
+            qsess.logical_pages = sess_lids.clone();
+            qsess.sum_pages = sess_spids.clone();
+            qsess.page_hashes = vec![None; qsess.logical_pages.len()];
+            qsess.pos = target_pos;
+
+            let q_str = if use_cot {
+                format!("\nQuestion: {}<|end_message|>", nd.question)
+            } else {
+                format!("\nQuestion: {}<|end_message|><|message_model|><|content_text|>", nd.question)
+            };
+            let q_toks = tk.encode(&q_str, true);
+
+            let t_q = Instant::now();
+            let mut pred = 0u32;
+            let mut step_ms_samples: Vec<f64> = Vec::new();
+            let target_lp = needle_exact_lps[ni] as u32;
+            let mut best_rank_any_head = usize::MAX;
+            let mut heads_hit_topk = 0usize;
+
+            for (qi, &qt) in q_toks.iter().enumerate() {
+                let ts = Instant::now();
+                qsess.next_tok = qt;
+                let (cb, pinned) = pool.upload_and_encode_decode_step(std::slice::from_mut(&mut qsess), 0, 0, 1, 0).expect("q step");
+                cb.commit();
+                cb.waitUntilCompleted();
+                pool.unpin_pids(&pinned);
+                step_ms_samples.push(ts.elapsed().as_secs_f64() * 1e3);
+                pred = unsafe { *(pool.toks[1].contents().as_ptr() as *const i32) } as u32;
+                qsess.pos += 1;
+                // On the final question token, inspect exact needle rank & Top-K hit rate in final Global layer (blk.23)!
+                if qi + 1 == q_toks.len() {
+                    let aux_u32 = unsafe {
+                        std::slice::from_raw_parts(pool.aux.contents().as_ptr() as *const u32, pool.al.total_u32)
+                    };
+                    let aux_f32 = unsafe {
+                        std::slice::from_raw_parts(pool.aux.contents().as_ptr() as *const f32, pool.al.total_u32)
+                    };
+                    let nfar_now = (qsess.pos - EXT) / pt;
+                    for g in 0..NKV {
+                        let cnt = aux_u32[pool.al.topk_cnt_off as usize + g] as usize;
+                        let tk_off = pool.al.topk_off as usize + g * pool.al.topk_stride;
+                        let hit = (0..cnt).any(|k| aux_u32[tk_off + k] == target_lp);
+                        if hit { heads_hit_topk += 1; }
+                        let sc_off = pool.al.scores_off as usize + g * pool.al.max_pages;
+                        let nd_sc = aux_f32[sc_off + target_lp as usize];
+                        let rank = 1 + (0..nfar_now).filter(|&p| aux_f32[sc_off + p] > nd_sc).count();
+                        if rank < best_rank_any_head { best_rank_any_head = rank; }
+                    }
+                }
+            }
+            let _q_ms = t_q.elapsed().as_secs_f64() * 1e3;
+
+            let max_gen = if use_cot { 256usize } else { 48usize };
+            let mut gen_toks: Vec<u32> = Vec::with_capacity(max_gen);
+            let mut cur_tok = pred;
+            let mut answer_bytes: Vec<u8> = Vec::new();
+            let mut in_think = false;
+            for _ in 0..max_gen {
+                if cur_tok == tk.eos { break; }
+                gen_toks.push(cur_tok);
+                if tk.is_special(cur_tok) {
+                    let s = String::from_utf8_lossy(&tk.decode_bytes(cur_tok)).to_string();
+                    if s == "<|content_thinking|>" { in_think = true; }
+                    else if s == "<|content_text|>" || s == "<|end_message|>" { in_think = false; }
+                } else if !in_think {
+                    answer_bytes.extend_from_slice(&tk.decode_bytes(cur_tok));
+                }
+                if gen_toks.len() >= max_gen { break; }
+                let ts = Instant::now();
+                qsess.next_tok = cur_tok;
+                let (cb, pinned) = pool.upload_and_encode_decode_step(std::slice::from_mut(&mut qsess), 0, 0, 1, 0).expect("g step");
+                cb.commit();
+                cb.waitUntilCompleted();
+                pool.unpin_pids(&pinned);
+                step_ms_samples.push(ts.elapsed().as_secs_f64() * 1e3);
+                cur_tok = unsafe { *(pool.toks[1].contents().as_ptr() as *const i32) } as u32;
+                qsess.pos += 1;
+            }
+
+            let ans = String::from_utf8_lossy(&answer_bytes).trim().replace('\n', " ");
+            let ok = ans.contains(nd.want_code) && ans.contains(nd.want_sector);
+            if ok { passed_cnt += 1; }
+            let med_ms = median_f64(step_ms_samples);
+            let dist_tok = target_pos.saturating_sub(needle_exact_lps[ni] * pt);
+            println!(
+                "  [{scale_name}] {:9} (dist={:9} tok, lp={:5}/{:5}) | {} | blk23 Top-{scale_top_k} hits={heads_hit_topk}/8 (best rank #{best_rank_any_head}) | {med_ms:.1} ms/tok ({:.1} tok/s) | {}",
+                nd.label, dist_tok, target_lp, n_far_pages,
+                if ok { "PASS" } else { "FAIL" },
+                1000.0 / med_ms.max(0.01),
+                ans
+            );
+            // Restore the haystack summary slots overwritten by needle `ni` before next depth probe!
+            for k in 0..needle_chunk_pages {
+                let hi = (s0 + k) % hay_lids.len();
+                clone_sum_page_slot(&pool, hay_tpl_spids[hi], base_hay_spids[s0 + k]);
+            }
+        }
+            println!("  ==> {scale_name}-K{scale_top_k} ({cent_tag}) SUMMARY ({target_pos} tok): {passed_cnt}/3 needles exact-matched | phys_footprint={:.2} GiB (vs {:.1} GiB FP16 = {:.0}x smaller!)",
+                     proc_phys_footprint_bytes() as f64 / (1u64 << 30) as f64,
+                     (target_pos as f64 * 32768.0) / (1u64 << 30) as f64,
+                     ((target_pos as f64 * 32768.0) / (1u64 << 30) as f64) / (proc_phys_footprint_bytes() as f64 / (1u64 << 30) as f64).max(0.01));
+        }
+
+        drop(pool);
+    }
+}
