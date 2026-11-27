@@ -1779,7 +1779,14 @@ impl Engine {
     fn mix(&self, e: &Enc, cls: u32, jobs: &[MixJob]) { self.mix_t(e, cls, jobs, 1); }
     fn mix_t(&self, e: &Enc, cls: u32, jobs: &[MixJob], t: usize) {
         if self.skip.get() & (1 << cls) != 0 { return; }
-        if t > 1 && std::env::var("INK_OLD_MIXB").is_err() {
+        // `k_mix` (decode) only writes fp32 outputs; fp16 prefill jobs (`hout` / `hcopy` / `nof32`)
+        // must always run through `k_mix_b_*`, even for single-token chunks (`t == 1`).
+        let need_fp16 = jobs.iter().any(|j| {
+            j.nof32 != 0
+                || j.hout.iter().any(|&h| h >= 0)
+                || j.hcopy.iter().flatten().any(|&h| h >= 0)
+        });
+        if (t > 1 && std::env::var("INK_OLD_MIXB").is_err()) || need_fp16 {
             // independent jobs run concurrently (no barrier between them)
             for j in jobs {
                 let j = MixJob { ntok: t as u32, ..*j };
