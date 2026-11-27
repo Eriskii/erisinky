@@ -638,3 +638,293 @@ template [[host_name("kgpeak_8_576")]] kernel void kg_peak<8, 576>(device float 
 template [[host_name("kgpeak_1_0")]] kernel void kg_peak<1, 0>(device float *, constant GSeg &, constant uint &, uint2, ushort);
 template [[host_name("kgpeak_4_0")]] kernel void kg_peak<4, 0>(device float *, constant GSeg &, constant uint &, uint2, ushort);
 
+// ======================= batched-decode MoE & lm_head micro-benchmarks =======================
+struct BatchProbeArgs {
+    uint w_lo, w_hi, expert_bytes, row_bytes, wtype, nrows, K, xh_off;
+    uint out_off, cnt, nexp, pad;
+};
+
+// Tensor-core MoE tile with NSG simdgroups (1, 2, 4, 8), BM=64 or 32, MT=8 or 16 tokens per SG.
+template <int NSG, int BM, int MT>
+kernel void kb_moe_tc(device const uchar * W [[buffer(0)]], device float * A [[buffer(2)]], constant BatchProbeArgs & a [[buffer(5)]],
+                      uint2 tgq [[threadgroup_position_in_grid]], ushort tid [[thread_index_in_threadgroup]], ushort sg [[simdgroup_index_in_threadgroup]]) {
+    constexpr int BK = 32, NT = NSG * 32;
+    threadgroup half sa[2][BM * BK];
+    const uint e = tgq.x, cb = tgq.y, K = a.K, cnt = a.cnt;
+    const uint ts0 = sg * MT;
+    const bool on = ts0 < cnt;
+    const int nt = on ? min(MT, (int) (cnt - ts0)) : 0;
+    auto tA0 = tensor<threadgroup half, dextents<int32_t, 2>, tensor_inline>(sa[0], dextents<int32_t, 2>(BK, BM));
+    auto tA1 = tensor<threadgroup half, dextents<int32_t, 2>, tensor_inline>(sa[1], dextents<int32_t, 2>(BK, BM));
+    auto tX = tensor((device half *) (A + a.xh_off) + (ulong) (on ? ts0 : 0) * K, dextents<int32_t, 2>((int) K, nt), array<int, 2>({1, (int) K}));
+    mpp::tensor_ops::matmul2d<mpp::tensor_ops::matmul2d_descriptor(MT, BM, BK, false, true, false,
+        mpp::tensor_ops::matmul2d_descriptor::mode::multiply_accumulate), execution_simdgroup> mm;
+    auto cT = mm.template get_destination_cooperative_tensor<decltype(tX), decltype(tA0), float>();
+    constexpr int NCHUNKS = (BM * BK) / (NT * 16);
+    const ulong ebase = (ulong(a.w_hi) << 32 | a.w_lo) + (ulong) e * a.expert_bytes;
+    device const uchar * wr[NCHUNKS > 0 ? NCHUNKS : 1];
+    uint hp[NCHUNKS > 0 ? NCHUNKS : 1];
+    uint widx[NCHUNKS > 0 ? NCHUNKS : 1];
+    WHead wh[NCHUNKS > 0 ? NCHUNKS : 1];
+    half4 wv[(NCHUNKS > 0 ? NCHUNKS : 1) * 4];
+    const bool wact = NCHUNKS > 0 ? true : (tid < (BM * BK) / 16);
+    if (NCHUNKS > 0) {
+        for (int c = 0; c < NCHUNKS; c++) {
+            const uint idx = (tid + c * NT) * 16;
+            widx[c] = idx; hp[c] = (idx % BK) / 16;
+            wr[c] = W + ebase + (ulong) (cb * BM + idx / BK) * a.row_bytes;
+            wstage(wr[c], a.wtype, 0, hp[c], wh[c], wv + c * 4);
+            for (int i = 0; i < 4; i++) ((threadgroup half4 *) (sa[0] + idx))[i] = wv[c * 4 + i];
+        }
+    } else if (wact) {
+        const uint idx = tid * 16;
+        widx[0] = idx; hp[0] = (idx % BK) / 16;
+        wr[0] = W + ebase + (ulong) (cb * BM + idx / BK) * a.row_bytes;
+        wstage(wr[0], a.wtype, 0, hp[0], wh[0], wv);
+        for (int i = 0; i < 4; i++) ((threadgroup half4 *) (sa[0] + idx))[i] = wv[i];
+    }
+    if (NSG > 1) threadgroup_barrier(mem_flags::mem_threadgroup); else simdgroup_barrier(mem_flags::mem_threadgroup);
+    uint buf = 0;
+    for (uint k0 = 0; k0 < K; k0 += BK) {
+        const bool more = k0 + BK < K;
+        if (more && wact) {
+            if (NCHUNKS > 0) { for (int c = 0; c < NCHUNKS; c++) wstage(wr[c], a.wtype, k0 + BK, hp[c], wh[c], wv + c * 4); }
+            else wstage(wr[0], a.wtype, k0 + BK, hp[0], wh[0], wv);
+        }
+        if (on) { auto sx = tX.slice(k0, 0); if (buf == 0) mm.run(sx, tA0, cT); else mm.run(sx, tA1, cT); }
+        if (more && wact) {
+            if (NCHUNKS > 0) { for (int c = 0; c < NCHUNKS; c++) for (int i = 0; i < 4; i++) ((threadgroup half4 *) (sa[buf ^ 1] + widx[c]))[i] = wv[c * 4 + i]; }
+            else for (int i = 0; i < 4; i++) ((threadgroup half4 *) (sa[buf ^ 1] + widx[0]))[i] = wv[i];
+        }
+        if (NSG > 1) threadgroup_barrier(mem_flags::mem_threadgroup); else simdgroup_barrier(mem_flags::mem_threadgroup);
+        buf ^= 1;
+    }
+    if (on) {
+        auto tC = tensor(A + a.out_off + (ulong) ts0 * a.nrows + cb * BM, dextents<int32_t, 2>(BM, nt), array<int, 2>({1, (int) a.nrows}));
+        cT.store(tC);
+    }
+}
+template [[host_name("kb_tc_4_64_16")]] kernel void kb_moe_tc<4, 64, 16>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+template [[host_name("kb_tc_2_64_16")]] kernel void kb_moe_tc<2, 64, 16>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+template [[host_name("kb_tc_1_64_16")]] kernel void kb_moe_tc<1, 64, 16>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+template [[host_name("kb_tc_1_32_16")]] kernel void kb_moe_tc<1, 32, 16>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+template [[host_name("kb_tc_4_64_8")]]  kernel void kb_moe_tc<4, 64, 8>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+template [[host_name("kb_tc_1_32_8")]]  kernel void kb_moe_tc<1, 32, 8>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+template [[host_name("kb_tc_2_32_8")]]  kernel void kb_moe_tc<2, 32, 8>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+template [[host_name("kb_tc_8_64_16")]] kernel void kb_moe_tc<8, 64, 16>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+
+// Direct quantized Q4_K multi-token matmul (NO TG staging, NO barriers): 1 SG handles 2 rows across NT tokens (half X)
+template <int NT, int NSG>
+kernel void kb_dir_q4k(device const uchar * W [[buffer(0)]], device float * A [[buffer(2)]], constant BatchProbeArgs & a [[buffer(5)]],
+                       uint2 tgq [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
+    const uint e = tgq.x, row0 = (tgq.y * NSG + sg) * 2, K = a.K;
+    const ulong ebase = (ulong(a.w_hi) << 32 | a.w_lo) + (ulong) e * a.expert_bytes;
+    device const uchar * w0 = W + ebase + (ulong) row0 * a.row_bytes;
+    device const uchar * w1 = W + ebase + (ulong) (row0 + 1) * a.row_bytes;
+    device const half * X = (device const half *) (A + a.xh_off);
+    const short ix = lane / 8, it = lane % 8, iq = it / 4, ir = it % 4;
+    const int nb = K / 256;
+    float sumf[2][NT];
+    for (int r = 0; r < 2; r++) for (int t = 0; t < NT; t++) sumf[r][t] = 0.0f;
+    for (int ib = ix; ib < nb; ib += 4) {
+        // load 2 weight rows ONCE, reuse across all NT tokens!
+        float wl0[2][16], wh0[2][16], dm0[2][4];
+        for (int r = 0; r < 2; r++) {
+            device const block_q4_K * b = (device const block_q4_K *) (r == 0 ? w0 : w1) + ib;
+            device const ushort * sc = (device const ushort *) b->scales + iq;
+            device const ushort * q1 = (device const ushort *) b->qs + 16 * iq + 4 * ir;
+            device const ushort * q2 = q1 + 32;
+            ushort sc16[4]; thread const uchar * sc8 = (thread const uchar *) sc16;
+            sc16[0] = sc[0] & 0x3f3f; sc16[1] = sc[2] & 0x3f3f;
+            sc16[2] = ((sc[4] >> 0) & 0x0f0f) | ((sc[0] & 0xc0c0) >> 2);
+            sc16[3] = ((sc[4] >> 4) & 0x0f0f) | ((sc[2] & 0xc0c0) >> 2);
+            const float d = float(b->d), dm = float(b->dmin);
+            const float d0 = d * sc8[0], d1 = d * sc8[1], d4 = d * sc8[4], d5 = d * sc8[5];
+            dm0[r][0] = dm * sc8[2]; dm0[r][1] = dm * sc8[3]; dm0[r][2] = dm * sc8[6]; dm0[r][3] = dm * sc8[7];
+            for (short i = 0; i < 4; i++) {
+                const ushort u1 = q1[i], u2 = q2[i];
+                wl0[r][2 * i + 0] = d0 * float(u1 & 0x000Fu);
+                wl0[r][2 * i + 1] = d0 * float((u1 >> 8) & 0x000Fu);
+                wl0[r][2 * i + 8] = d1 * float((u1 >> 4) & 0x000Fu);
+                wl0[r][2 * i + 9] = d1 * float((u1 >> 12) & 0x000Fu);
+                wh0[r][2 * i + 0] = d4 * float(u2 & 0x000Fu);
+                wh0[r][2 * i + 1] = d4 * float((u2 >> 8) & 0x000Fu);
+                wh0[r][2 * i + 8] = d5 * float((u2 >> 4) & 0x000Fu);
+                wh0[r][2 * i + 9] = d5 * float((u2 >> 12) & 0x000Fu);
+            }
+        }
+        const uint xoff = ib * 256 + 64 * iq + 8 * ir;
+        for (int t = 0; t < NT; t++) {
+            device const half4 * xp = (device const half4 *) (X + (ulong) t * K + xoff);
+            const float4 y0 = float4(xp[0]), y1 = float4(xp[1]), y2 = float4(xp[8]), y3 = float4(xp[9]);
+            const float4 y4 = float4(xp[32]), y5 = float4(xp[33]), y6 = float4(xp[40]), y7 = float4(xp[41]);
+            const float s0 = y0.x + y0.y + y0.z + y0.w + y1.x + y1.y + y1.z + y1.w;
+            const float s1 = y2.x + y2.y + y2.z + y2.w + y3.x + y3.y + y3.z + y3.w;
+            const float s2 = y4.x + y4.y + y4.z + y4.w + y5.x + y5.y + y5.z + y5.w;
+            const float s3 = y6.x + y6.y + y6.z + y6.w + y7.x + y7.y + y7.z + y7.w;
+            for (int r = 0; r < 2; r++) {
+                float a0 = dot(y0, float4(wl0[r][0], wl0[r][1], wl0[r][2], wl0[r][3])) +
+                           dot(y1, float4(wl0[r][4], wl0[r][5], wl0[r][6], wl0[r][7])) +
+                           dot(y2, float4(wl0[r][8], wl0[r][9], wl0[r][10], wl0[r][11])) +
+                           dot(y3, float4(wl0[r][12], wl0[r][13], wl0[r][14], wl0[r][15])) +
+                           dot(y4, float4(wh0[r][0], wh0[r][1], wh0[r][2], wh0[r][3])) +
+                           dot(y5, float4(wh0[r][4], wh0[r][5], wh0[r][6], wh0[r][7])) +
+                           dot(y6, float4(wh0[r][8], wh0[r][9], wh0[r][10], wh0[r][11])) +
+                           dot(y7, float4(wh0[r][12], wh0[r][13], wh0[r][14], wh0[r][15]));
+                sumf[r][t] += a0 - (s0 * dm0[r][0] + s1 * dm0[r][1] + s2 * dm0[r][2] + s3 * dm0[r][3]);
+            }
+        }
+    }
+    for (int r = 0; r < 2; r++) for (int t = 0; t < NT; t++) {
+        const float y = simd_sum(sumf[r][t]);
+        if (lane == 0) A[a.out_off + (ulong) t * a.nrows + row0 + r] = y;
+    }
+}
+template [[host_name("kb_dir_q4k_1")]] kernel void kb_dir_q4k<1, 4>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+template [[host_name("kb_dir_q4k_2")]] kernel void kb_dir_q4k<2, 4>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+template [[host_name("kb_dir_q4k_4")]] kernel void kb_dir_q4k<4, 4>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+template [[host_name("kb_dir_q4k_8")]] kernel void kb_dir_q4k<8, 4>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+
+// Direct quantized Q8_0 / Q5_0 multi-token matmul (NO TG staging, NO barriers): 1 SG handles 2 rows across NT tokens
+template <int NT, int NSG>
+kernel void kb_dir_dn(device const uchar * W [[buffer(0)]], device float * A [[buffer(2)]], constant BatchProbeArgs & a [[buffer(5)]],
+                      uint2 tgq [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
+    const uint e = tgq.x, row0 = (tgq.y * NSG + sg) * 2, K = a.K;
+    const ulong ebase = (ulong(a.w_hi) << 32 | a.w_lo) + (ulong) e * a.expert_bytes;
+    device const half * X = (device const half *) (A + a.xh_off);
+    const int nb = K / 32; // 36 blocks for K=1152
+    float sumf[2][NT];
+    for (int r = 0; r < 2; r++) for (int t = 0; t < NT; t++) sumf[r][t] = 0.0f;
+    for (int ib = lane; ib < nb; ib += 32) {
+        float4 xv[NT][8];
+        for (int t = 0; t < NT; t++) {
+            device const half4 * xp = (device const half4 *) (X + (ulong) t * K + ib * 32);
+            for (int i = 0; i < 8; i++) xv[t][i] = float4(xp[i]);
+        }
+        for (int r = 0; r < 2; r++) {
+            device const uchar * rowp = W + ebase + (ulong) (row0 + r) * a.row_bytes;
+            if (a.wtype == 8) {
+                device const block_q8_0 * bq = (device const block_q8_0 *) rowp + ib;
+                const float d = float(bq->d);
+                device const packed_char4 * q = (device const packed_char4 *) bq->qs;
+                float4 wv[8];
+                for (int i = 0; i < 8; i++) wv[i] = float4(char4(q[i])) * d;
+                for (int t = 0; t < NT; t++) {
+                    float s = 0;
+                    for (int i = 0; i < 8; i++) s += dot(xv[t][i], wv[i]);
+                    sumf[r][t] += s;
+                }
+            } else {
+                device const block_q5_0 * bq = (device const block_q5_0 *) rowp + ib;
+                const float d = float(bq->d);
+                const uint qh = as_type<uint>(uchar4(*(device const packed_uchar4 *) bq->qh));
+                device const packed_uchar4 * qs4 = (device const packed_uchar4 *) bq->qs;
+                float4 wv[8];
+                for (int i = 0; i < 4; i++) {
+                    const uchar4 q = uchar4(qs4[i]);
+                    const uint hl = qh >> (4 * i), hh = qh >> (4 * i + 16);
+                    wv[i] = (float4(int4(uint4(q & 0xF) | ((uint4(hl, hl >> 1, hl >> 2, hl >> 3) & 1) << 4))) - 16.0f) * d;
+                    wv[4 + i] = (float4(int4(uint4(q >> 4) | ((uint4(hh, hh >> 1, hh >> 2, hh >> 3) & 1) << 4))) - 16.0f) * d;
+                }
+                for (int t = 0; t < NT; t++) {
+                    float s = 0;
+                    for (int i = 0; i < 8; i++) s += dot(xv[t][i], wv[i]);
+                    sumf[r][t] += s;
+                }
+            }
+        }
+    }
+    for (int r = 0; r < 2; r++) for (int t = 0; t < NT; t++) {
+        const float y = simd_sum(sumf[r][t]);
+        if (lane == 0) A[a.out_off + (ulong) t * a.nrows + row0 + r] = y;
+    }
+}
+template [[host_name("kb_dir_dn_1")]] kernel void kb_dir_dn<1, 4>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+template [[host_name("kb_dir_dn_2")]] kernel void kb_dir_dn<2, 4>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+template [[host_name("kb_dir_dn_4")]] kernel void kb_dir_dn<4, 4>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+template [[host_name("kb_dir_dn_8")]] kernel void kb_dir_dn<8, 4>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+
+// Zero-spill direct quantized multi-token Q4_K: unpack 1 row's 32 weights to half4 once (16 regs), loop over cnt tokens from L1!
+// 1 SG = 1 row (or 1 gate + 1 up = 2 rows? test NR=1 and NR=2); lane L handles 8 weights of superblock (1 block/iter, 4 lanes/sub-block)
+template <int NSG>
+kernel void kb_dir2_q4k(device const uchar * W [[buffer(0)]], device float * A [[buffer(2)]], constant BatchProbeArgs & a [[buffer(5)]],
+                        uint2 tgq [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
+    const uint e = tgq.x, row = tgq.y * NSG + sg, K = a.K, cnt = a.cnt;
+    const ulong ebase = (ulong(a.w_hi) << 32 | a.w_lo) + (ulong) e * a.expert_bytes;
+    device const block_q4_K * wb = (device const block_q4_K *) (W + ebase + (ulong) row * a.row_bytes);
+    device const half * X = (device const half *) (A + a.xh_off);
+    const int j = lane / 8, l0 = 4 * (lane % 8), nb = K / 256;
+    float sumf[16];
+    for (uint t = 0; t < cnt; t++) sumf[t] = 0.0f;
+    for (int ib = 0; ib < nb; ib++) {
+        device const block_q4_K * b = wb + ib;
+        const uint q = *(device const uint *) (b->qs + 4 * lane);
+        float sc0, m0, sc1, m1;
+        scale_min_k4(2 * j, b->scales, sc0, m0);
+        scale_min_k4(2 * j + 1, b->scales, sc1, m1);
+        const float d = float(b->d), dm = float(b->dmin);
+        const half4 wl = half4(fma(float4(q & 0xFu, (q >> 8) & 0xFu, (q >> 16) & 0xFu, (q >> 24) & 0xFu), d * sc0, -(dm * m0)));
+        const half4 wh = half4(fma(float4((q >> 4) & 0xFu, (q >> 12) & 0xFu, (q >> 20) & 0xFu, (q >> 28) & 0xFu), d * sc1, -(dm * m1)));
+        const uint xl_off = ib * 256 + 64 * j + l0;
+        for (uint t = 0; t < cnt; t++) {
+            device const half * xt = X + (ulong) t * K + xl_off;
+            const half4 xl = *(device const half4 *) xt;
+            const half4 xh = *(device const half4 *) (xt + 32);
+            sumf[t] += dot(float4(wl), float4(xl)) + dot(float4(wh), float4(xh));
+        }
+    }
+    for (uint t = 0; t < cnt; t++) {
+        const float y = simd_sum(sumf[t]);
+        if (lane == 0) A[a.out_off + (ulong) t * a.nrows + row] = y;
+    }
+}
+template [[host_name("kb_dir2_q4k_4")]] kernel void kb_dir2_q4k<4>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+template [[host_name("kb_dir2_q4k_8")]] kernel void kb_dir2_q4k<8>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+
+// Zero-spill direct quantized multi-token Q8_0/Q5_0 (down): 1 SG = 1 row, unpack 32 weights to half4[8] once, loop over cnt tokens from L1!
+template <int NSG>
+kernel void kb_dir2_dn(device const uchar * W [[buffer(0)]], device float * A [[buffer(2)]], constant BatchProbeArgs & a [[buffer(5)]],
+                       uint2 tgq [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
+    const uint e = tgq.x, row = tgq.y * NSG + sg, K = a.K, cnt = a.cnt;
+    const ulong ebase = (ulong(a.w_hi) << 32 | a.w_lo) + (ulong) e * a.expert_bytes;
+    device const uchar * rowp = W + ebase + (ulong) row * a.row_bytes;
+    device const half * X = (device const half *) (A + a.xh_off);
+    const int nb = K / 32; // 36 blocks
+    float sumf[16];
+    for (uint t = 0; t < cnt; t++) sumf[t] = 0.0f;
+    for (int ib = lane; ib < nb; ib += 32) {
+        half4 wv[8];
+        if (a.wtype == 8) {
+            device const block_q8_0 * bq = (device const block_q8_0 *) rowp + ib;
+            const half d = bq->d;
+            device const packed_char4 * q = (device const packed_char4 *) bq->qs;
+            for (int i = 0; i < 8; i++) wv[i] = half4(char4(q[i])) * d;
+        } else {
+            device const block_q5_0 * bq = (device const block_q5_0 *) rowp + ib;
+            const half d = bq->d;
+            const uint qh = as_type<uint>(uchar4(*(device const packed_uchar4 *) bq->qh));
+            device const packed_uchar4 * qs4 = (device const packed_uchar4 *) bq->qs;
+            for (int i = 0; i < 4; i++) {
+                const uchar4 q = uchar4(qs4[i]);
+                const uint hl = qh >> (4 * i), hh = qh >> (4 * i + 16);
+                wv[i] = (half4(int4(uint4(q & 0xF) | ((uint4(hl, hl >> 1, hl >> 2, hl >> 3) & 1) << 4))) - half4(16.0h)) * d;
+                wv[4 + i] = (half4(int4(uint4(q >> 4) | ((uint4(hh, hh >> 1, hh >> 2, hh >> 3) & 1) << 4))) - half4(16.0h)) * d;
+            }
+        }
+        for (uint t = 0; t < cnt; t++) {
+            device const half4 * xp = (device const half4 *) (X + (ulong) t * K + ib * 32);
+            float s = 0;
+            for (int i = 0; i < 8; i++) s += dot(float4(xp[i]), float4(wv[i]));
+            sumf[t] += s;
+        }
+    }
+    for (uint t = 0; t < cnt; t++) {
+        const float y = simd_sum(sumf[t]);
+        if (lane == 0) A[a.out_off + (ulong) t * a.nrows + row] = y;
+    }
+}
+template [[host_name("kb_dir2_dn_4")]] kernel void kb_dir2_dn<4>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+template [[host_name("kb_dir2_dn_8")]] kernel void kb_dir2_dn<8>(device const uchar *, device float *, constant BatchProbeArgs &, uint2, ushort, ushort);
+
+
+

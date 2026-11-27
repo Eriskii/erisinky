@@ -1,0 +1,2928 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Inkling 2 Mini — 256K KV Compression, Disk Offload, TokenDance & .ikv Cartridges</title>
+<style>
+:root {
+  --bg: #0b0e14;
+  --bg-elev: #111622;
+  --bg-card: #141a28;
+  --bg-subtle: #192133;
+  --border: #232d42;
+  --border-hi: #33425f;
+  --text: #e6edf5;
+  --text-dim: #94a3b8;
+  --text-faint: #64748b;
+  --cyan: #38bdf8;
+  --cyan-soft: rgba(56, 189, 248, 0.14);
+  --emerald: #34d399;
+  --emerald-soft: rgba(52, 211, 153, 0.14);
+  --amber: #fbbf24;
+  --amber-soft: rgba(251, 191, 36, 0.14);
+  --violet: #a78bfa;
+  --violet-soft: rgba(167, 139, 250, 0.14);
+  --rose: #fb7185;
+  --rose-soft: rgba(251, 113, 133, 0.14);
+  --grid-line: rgba(148, 163, 184, 0.12);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+[data-theme="light"] {
+  --bg: #f8fafc;
+  --bg-elev: #ffffff;
+  --bg-card: #ffffff;
+  --bg-subtle: #f1f5f9;
+  --border: #e2e8f0;
+  --border-hi: #cbd5e1;
+  --text: #0f172a;
+  --text-dim: #475569;
+  --text-faint: #64748b;
+  --cyan: #0284c7;
+  --cyan-soft: rgba(2, 132, 199, 0.11);
+  --emerald: #059669;
+  --emerald-soft: rgba(5, 150, 105, 0.11);
+  --amber: #d97706;
+  --amber-soft: rgba(217, 119, 6, 0.12);
+  --violet: #7c3aed;
+  --violet-soft: rgba(124, 58, 237, 0.11);
+  --rose: #e11d48;
+  --rose-soft: rgba(225, 29, 72, 0.11);
+  --grid-line: rgba(15, 23, 42, 0.08);
+  --shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; font-size: 16px; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  line-height: 1.58;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* Sticky Topbar */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  height: 56px;
+  background: color-mix(in srgb, var(--bg-elev) 88%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  gap: 12px;
+}
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.brand-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--cyan), var(--emerald));
+  box-shadow: 0 0 12px var(--cyan);
+  flex-shrink: 0;
+}
+.topbar-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.pill {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.pill-cyan { border-color: color-mix(in srgb, var(--cyan) 40%, transparent); background: var(--cyan-soft); color: var(--cyan); }
+.pill-emerald { border-color: color-mix(in srgb, var(--emerald) 40%, transparent); background: var(--emerald-soft); color: var(--emerald); }
+.pill-amber { border-color: color-mix(in srgb, var(--amber) 40%, transparent); background: var(--amber-soft); color: var(--amber); }
+.pill-violet { border-color: color-mix(in srgb, var(--violet) 40%, transparent); background: var(--violet-soft); color: var(--violet); }
+.pill-rose { border-color: color-mix(in srgb, var(--rose) 40%, transparent); background: var(--rose-soft); color: var(--rose); }
+
+.theme-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.theme-btn:hover { border-color: var(--cyan); }
+
+.read-progress {
+  position: fixed;
+  top: 56px;
+  left: 0;
+  height: 2px;
+  width: 0%;
+  background: linear-gradient(90deg, var(--cyan), var(--emerald), var(--violet));
+  z-index: 61;
+  transition: width 0.08s linear;
+}
+
+/* Main Shell */
+.shell {
+  max-width: 1440px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  gap: 28px;
+  padding: 24px 24px 80px;
+}
+
+/* Sticky Left Chapter Rail */
+.toc {
+  position: sticky;
+  top: 76px;
+  align-self: start;
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+  padding-right: 8px;
+}
+.toc-label {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text-faint);
+  margin: 0 0 10px 10px;
+}
+.toc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.toc-link {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--text-dim);
+  font-size: 0.83rem;
+  border-left: 2px solid transparent;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.toc-link:hover {
+  background: var(--bg-subtle);
+  color: var(--text);
+}
+.toc-link.active {
+  background: var(--cyan-soft);
+  color: var(--cyan);
+  border-left-color: var(--cyan);
+  font-weight: 600;
+}
+.toc-num {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  opacity: 0.75;
+  flex-shrink: 0;
+}
+.toc-meta {
+  margin-top: 18px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+.toc-meta strong { color: var(--text); }
+.toc-meta code {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--cyan);
+}
+
+/* Content Column */
+.content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 44px;
+}
+
+/* Hero Section */
+.hero {
+  background: radial-gradient(1000px 360px at 8% -10%, var(--cyan-soft), transparent 60%),
+              radial-gradient(800px 340px at 92% 0%, var(--violet-soft), transparent 55%),
+              var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 32px 32px 28px;
+  box-shadow: var(--shadow);
+}
+.hero-kicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.hero h1 {
+  margin: 0 0 10px;
+  font-family: var(--font-display);
+  font-size: clamp(1.75rem, 3vw, 2.45rem);
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+.hero-sub {
+  margin: 0 0 24px;
+  font-size: 1.02rem;
+  color: var(--text-dim);
+  max-width: 78ch;
+}
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+.kpi-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+  overflow: hidden;
+}
+.kpi-card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: var(--accent, var(--cyan));
+}
+.kpi-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+.kpi-val {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--accent, var(--cyan));
+  line-height: 1.1;
+}
+.kpi-desc {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  line-height: 1.42;
+}
+.kpi-desc strong { color: var(--text); }
+
+/* Act Sections */
+section.act {
+  scroll-margin-top: 74px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.act-head {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 14px;
+}
+.act-tag {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--cyan);
+  margin-bottom: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.act-head h2 {
+  margin: 0 0 8px;
+  font-family: var(--font-display);
+  font-size: clamp(1.35rem, 2.2vw, 1.75rem);
+  letter-spacing: -0.02em;
+  line-height: 1.22;
+}
+.act-lead {
+  margin: 0;
+  color: var(--text-dim);
+  max-width: 80ch;
+  font-size: 0.96rem;
+}
+
+/* Cards & Grids */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px 22px;
+  box-shadow: var(--shadow);
+}
+.card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.card-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.card-note {
+  margin: 0 0 14px;
+  font-size: 0.88rem;
+  color: var(--text-dim);
+  max-width: 80ch;
+}
+.card-note strong { color: var(--text); }
+
+.grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+
+/* Callouts */
+.callout {
+  border-radius: 11px;
+  padding: 13px 16px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  font-size: 0.88rem;
+  color: var(--text-dim);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.callout strong { color: var(--text); }
+.callout-title {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.callout.info { border-left: 3px solid var(--cyan); background: color-mix(in srgb, var(--cyan-soft) 55%, var(--bg-card)); }
+.callout.info .callout-title { color: var(--cyan); }
+.callout.win { border-left: 3px solid var(--emerald); background: color-mix(in srgb, var(--emerald-soft) 55%, var(--bg-card)); }
+.callout.win .callout-title { color: var(--emerald); }
+.callout.warn { border-left: 3px solid var(--amber); background: color-mix(in srgb, var(--amber-soft) 55%, var(--bg-card)); }
+.callout.warn .callout-title { color: var(--amber); }
+.callout.fail { border-left: 3px solid var(--rose); background: color-mix(in srgb, var(--rose-soft) 55%, var(--bg-card)); }
+.callout.fail .callout-title { color: var(--rose); }
+
+/* Controls / Tabs / Sliders */
+.ctrl-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.seg-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+}
+.seg-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  padding: 5px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.seg-btn:hover { color: var(--text); }
+.seg-btn.active {
+  background: var(--cyan);
+  color: #061018;
+  font-weight: 700;
+}
+[data-theme="light"] .seg-btn.active { color: #ffffff; }
+
+.doodad {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-subtle) 45%, var(--bg-card)), var(--bg-card));
+  border: 1px solid var(--border-hi);
+  border-radius: 14px;
+  padding: 20px 22px;
+  box-shadow: var(--shadow);
+}
+.doodad-badge {
+  font-family: var(--font-mono);
+  font-size: 0.69rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--violet-soft);
+  color: var(--violet);
+  border: 1px solid color-mix(in srgb, var(--violet) 35%, transparent);
+}
+.slider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+}
+.slider-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.slider-box label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.slider-val {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--cyan);
+  font-size: 0.84rem;
+}
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--cyan);
+  cursor: pointer;
+}
+select.ui-select {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--border-hi);
+  background: var(--bg-card);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.metric-mini {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.metric-mini .m-lbl {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.metric-mini .m-num {
+  font-family: var(--font-mono);
+  font-size: 1.08rem;
+  font-weight: 700;
+  margin-top: 2px;
+}
+.metric-mini .m-sub {
+  font-size: 0.73rem;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+/* Tables */
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.83rem;
+}
+th, td {
+  padding: 9px 11px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+th {
+  background: var(--bg-subtle);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+td.num, th.num { text-align: right; font-family: var(--font-mono); }
+tr:last-child td { border-bottom: none; }
+tr.row-hi td { background: color-mix(in srgb, var(--emerald-soft) 50%, transparent); font-weight: 600; }
+tr.row-warn td { background: color-mix(in srgb, var(--amber-soft) 45%, transparent); }
+tr.row-bad td { background: color-mix(in srgb, var(--rose-soft) 40%, transparent); }
+
+/* Code / Inline Mono */
+code {
+  font-family: var(--font-mono);
+  font-size: 0.84em;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+}
+pre.output-box {
+  margin: 0;
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.77rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
+/* SVG Wrapper */
+.svg-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+.svg-wrap svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+svg text {
+  font-family: var(--font-mono);
+  fill: var(--text-dim);
+}
+svg .svg-title { font-family: var(--font-ui); fill: var(--text); font-weight: 600; }
+svg .svg-strong { fill: var(--text); font-weight: 700; }
+svg .grid-stroke { stroke: var(--grid-line); stroke-width: 1; }
+svg .axis-stroke { stroke: var(--border-hi); stroke-width: 1.2; }
+
+/* Fact Badges for Doodad 5 */
+.fact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.fact-btn {
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.fact-btn:hover, .fact-btn.active {
+  border-color: var(--emerald);
+  background: var(--emerald-soft);
+}
+.fact-btn .f-top {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--emerald);
+  margin-bottom: 4px;
+}
+.fact-btn .f-val {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  word-break: break-word;
+}
+
+/* Floating Tooltip */
+.tooltip {
+  position: fixed;
+  pointer-events: none;
+  z-index: 100;
+  opacity: 0;
+  transform: translate(12px, 12px);
+  background: color-mix(in srgb, var(--bg-elev) 96%, transparent);
+  border: 1px solid var(--cyan);
+  border-radius: 9px;
+  padding: 9px 12px;
+  font-size: 0.78rem;
+  color: var(--text);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+  max-width: 300px;
+  transition: opacity 0.08s ease;
+}
+.tooltip.show { opacity: 1; }
+.tooltip .tt-h {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--cyan);
+  margin-bottom: 4px;
+}
+.tooltip .tt-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--text-dim);
+}
+.tooltip .tt-row span:last-child { color: var(--text); font-weight: 600; }
+
+/* Arch Flow Boxes */
+.arch-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+.arch-box {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+.arch-box .ab-k {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  color: var(--cyan);
+  margin-bottom: 4px;
+}
+.arch-box .ab-v {
+  font-weight: 700;
+  font-size: 0.94rem;
+  margin-bottom: 3px;
+}
+.arch-box .ab-s {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+footer {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+  color: var(--text-faint);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* Responsive */
+@media (max-width: 1120px) {
+  .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-2 { grid-template-columns: 1fr; }
+}
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: 1fr;
+    padding: 16px 14px 64px;
+    gap: 18px;
+  }
+  .toc {
+    position: sticky;
+    top: 56px;
+    z-index: 40;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 0;
+    max-height: none;
+    overflow-x: auto;
+  }
+  .toc-label, .toc-meta { display: none; }
+  .toc-list { flex-direction: row; gap: 6px; }
+  .toc-link {
+    white-space: nowrap;
+    border-left: none;
+    border-bottom: 2px solid transparent;
+    padding: 6px 10px;
+    font-size: 0.78rem;
+  }
+  .toc-link.active { border-left-color: transparent; border-bottom-color: var(--cyan); }
+  .topbar-badges .hide-sm { display: none; }
+  .hero { padding: 22px 18px; }
+  .kpi-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-left">
+    <span class="brand-dot" aria-hidden="true"></span>
+    <span class="topbar-title">inkling-engine · 256K KV, Disk Offload, TokenDance &amp; .ikv Report</span>
+  </div>
+  <div class="topbar-badges">
+    <span class="pill pill-cyan hide-sm">Apple M5 Pro · 48 GiB</span>
+    <span class="pill hide-sm">Inkling 2 Mini (26.4B / 3.4B MoE)</span>
+    <button id="themeBtn" class="theme-btn" type="button" aria-label="Toggle color theme">☀ Light</button>
+  </div>
+</header>
+<div id="readProgress" class="read-progress"></div>
+
+<div class="shell">
+  <aside class="toc" aria-label="Chronological chapters">
+    <div class="toc-label">Chronology</div>
+    <ul class="toc-list">
+      <li><a class="toc-link active" href="#overview"><span class="toc-num">TOP</span><span>Headline Results</span></a></li>
+      <li><a class="toc-link" href="#act0"><span class="toc-num">00</span><span>Hardware &amp; 256K Pivot</span></a></li>
+      <li><a class="toc-link" href="#act1"><span class="toc-num">01</span><span>256K Compression Probes</span></a></li>
+      <li><a class="toc-link" href="#act2"><span class="toc-num">02</span><span>Disk Expert Offloading</span></a></li>
+      <li><a class="toc-link" href="#act3"><span class="toc-num">03</span><span>MoE Kernels &amp; FP16 CS</span></a></li>
+      <li><a class="toc-link" href="#act4"><span class="toc-num">04</span><span>TokenDance + KVCOMM</span></a></li>
+      <li><a class="toc-link" href="#act5"><span class="toc-num">05</span><span>Live 256K Engine v1→v2</span></a></li>
+      <li><a class="toc-link" href="#act6"><span class="toc-num">06</span><span>.ikv &amp; 50K Agent Demo</span></a></li>
+      <li><a class="toc-link" href="#epilogue"><span class="toc-num">END</span><span>Scorecard &amp; Next</span></a></li>
+    </ul>
+    <div class="toc-meta">
+      <strong>100% Measured Data</strong><br>
+      Every chart &amp; table comes directly from real runs on <code>Inkling-2-Mini-Q4_K_M.gguf</code> (<code>16.3 GiB</code>) with zero synthetic padding.<br><br>
+      Hover charts for exact numbers. Use sliders to test regimes.
+    </div>
+  </aside>
+
+  <main class="content">
+    <!-- HERO -->
+    <section id="overview" class="hero">
+      <div class="hero-kicker">
+        <span class="pill pill-cyan">Empirical Engineering Log</span>
+        <span class="pill pill-emerald">Zero External Deps · Offline Ready</span>
+        <span class="pill pill-violet">GPL-3.0-or-later</span>
+      </div>
+      <h1>Crushing 256K KV Cache 76.7× &amp; Instant 50K File Reads on a Laptop</h1>
+      <p class="hero-sub">
+        We started the night with an old README claiming Inkling 2 Mini's KV cache couldn't shrink and an engine that crashed at 262,144 tokens. Here is everything we tested, broke, fixed, and measured—in exact chronological order—on a single 48 GiB Apple M5 Pro.
+      </p>
+      <div class="kpi-grid">
+        <div class="kpi-card" style="--accent: var(--cyan)">
+          <div class="kpi-label">256K Active RAM / Instance</div>
+          <div class="kpi-val">109 MiB</div>
+          <div class="kpi-desc"><strong>76.7× smaller</strong> than 8.16 GiB FP16. <strong>96 independent 256K</strong> sessions fit live in 10.45 GiB; <strong>128 radix-shared</strong> in 6.37 GiB vs 1.04 TiB (<strong>164×</strong>, KL 0.018, 16/16 argmax).</div>
+        </div>
+        <div class="kpi-card" style="--accent: var(--emerald)">
+          <div class="kpi-label">Instant .ikv File Mount</div>
+          <div class="kpi-val">38.2×</div>
+          <div class="kpi-desc"><strong>50,252 stitched tokens</strong> in <strong>0.80 s</strong> vs 30.53 s raw prefill (130.5K eff tok/s). <strong>100% verbatim</strong> retrieval from 18.5K–47.5K tokens outside the 1,024 window.</div>
+        </div>
+        <div class="kpi-card" style="--accent: var(--violet)">
+          <div class="kpi-label">Cross-Agent Sharing</div>
+          <div class="kpi-val">64×–256×</div>
+          <div class="kpi-desc">TokenDance + KVCOMM on Zero-RoPE Inkling: <strong>KL 0.0049–0.0081</strong>, <strong>95–96/96</strong> argmax across diverging prefixes, and <strong>1.28× faster</strong> fused GPU attention.</div>
+        </div>
+        <div class="kpi-card" style="--accent: var(--amber)">
+          <div class="kpi-label">Disk Expert Offload</div>
+          <div class="kpi-val">992 tok/s</div>
+          <div class="kpi-desc"><strong>Bit-exact (0.00e0)</strong> layer-pipelined macro-batching (<code>B_macro=2048</code>) with 7.83 GiB offloaded; <strong>849 tok/s</strong> with all 15.2 GiB of experts offloaded.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ACT 0 -->
+    <section id="act0" class="act">
+      <div class="act-head">
+        <div class="act-tag">Act 0 · Starting Point &amp; The Pivot</div>
+        <h2>Hardware, Zero-RoPE Architecture &amp; Why 256K Changed Everything</h2>
+        <p class="act-lead">
+          Before optimizing anything, we profiled the existing batched engine. That uncovered two surprises: a greedy benchmarking trap, and the fact that old 8K-context assumptions break completely once you target 256K.
+        </p>
+      </div>
+
+      <div class="arch-strip">
+        <div class="arch-box">
+          <div class="ab-k">Machine</div>
+          <div class="ab-v">Apple M5 Pro · 48 GiB</div>
+          <div class="ab-s">~290 GB/s unified DRAM; ~7.5–10 GiB/s cold NVMe; Metal 4 neural accelerators.</div>
+        </div>
+        <div class="arch-box">
+          <div class="ab-k">Model Weights</div>
+          <div class="ab-v">16.3 GiB Q4_K_M</div>
+          <div class="ab-s">26.4B total / 3.4B active MoE. 128 experts = 15.25 GiB (93.6%); dense = 1.05 GiB.</div>
+        </div>
+        <div class="arch-box">
+          <div class="ab-k">Looped Depth</div>
+          <div class="ab-v">24 Phys → 48 Exec</div>
+          <div class="ab-s">Prelude 0..5, Core 6..17 looped 3×, Coda 18..23. 40 SWA-1024 + 8 Full slots.</div>
+        </div>
+        <div class="arch-box">
+          <div class="ab-k">Secret Weapon</div>
+          <div class="ab-v">Zero RoPE Past 1,024</div>
+          <div class="ab-s">No rotary angles baked into K/V. Relative bias is added live for d &lt; 1024 and is 0 beyond.</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title">Baseline Batched Decode: Divergent vs. Greedy-Shared Trap</h3>
+            <span class="pill pill-cyan">bench-batch · --max-mem 6 GiB</span>
+          </div>
+          <p class="card-note">
+            Running identical prompts with greedy decoding tricks every sequence into picking the exact same <strong>8 of 128 experts</strong> (1,572.8 tok/s at B=128). Real multi-session workloads diverge and touch <strong>83–112 experts</strong> per layer—still scaling cleanly from <strong>31.8 → 603.8 → 1,077.4 tok/s</strong>.
+          </p>
+          <div id="chartAct0Batch" class="svg-wrap"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title">Where GPU Time Actually Goes (<code>prof-batch</code>)</h3>
+            <div class="seg-group" id="profToggle">
+              <button class="seg-btn active" data-b="64" type="button">B=64 (114.7 ms)</button>
+              <button class="seg-btn" data-b="256" type="button">B=256 (237.6 ms)</button>
+            </div>
+          </div>
+          <p class="card-note">
+            At <code>B=64</code>, MoE expert GEMMs (<code>moe_gu</code> + <code>moe_down</code>) eat <strong>83.9%</strong> of every decode step while attention is just 1.7%. At <code>B=256</code>, MoE is 68.1% and attention/QKV start climbing.
+          </p>
+          <div id="chartAct0Prof" class="svg-wrap"></div>
+        </div>
+      </div>
+
+      <div class="callout warn">
+        <div class="callout-title">The 256K Pivot · Why the Old 8K Analysis Failed</div>
+        <div>
+          At short 8K contexts, the 40 sliding-window slots dominate KV memory. At <strong>256K (262,144 tokens)</strong>, the math flips upside down: SWA stays flat at <strong>160 MiB (2%)</strong>, while the 8 Full-attention slots explode to <strong>8.00 GiB per session (98%)</strong>—<strong>8.16 GiB/instance</strong> (522 GiB for 64 sessions, 1.04 TiB for 128). Worse, <code>engine.rs:525</code> had a <strong>32-bit offset assert</strong> that literally crashed at 262,144 tokens (hard ceiling: 262,143). That forced us to stop trusting old README micro-tests and measure real 256K behavior from scratch.
+        </div>
+      </div>
+    </section>
+
+    <!-- ACT 1 -->
+    <section id="act1" class="act">
+      <div class="act-head">
+        <div class="act-tag">Act 1 · Empirical 256K Compression Probes (kv-probe)</div>
+        <h2>Measuring All 64 Heads, Rotated Quantization, Sparse Pages &amp; 24-Layer Expert Skew</h2>
+        <p class="act-lead">
+          We ran a full empirical probe suite on <strong>16,344 real tokens</strong> (15,320 far keys + 1,024 local, prefilled at 1,931 tok/s, exact FP16 reference verified at <code>24/24</code> argmax and <code>KL 0.00e0</code>). Several old assumptions died immediately; two huge new wins popped out.
+        </p>
+      </div>
+
+      <!-- DOODAD 1: 8x8 DuoAttention Heatmap -->
+      <div class="doodad">
+        <div class="card-head">
+          <div>
+            <h3 class="card-title">Interactive Doodad #1 · 8×8 DuoAttention Single-Head KL Heatmap</h3>
+          </div>
+          <span class="doodad-badge">Interactive · All 64 Real Heads</span>
+        </div>
+        <p class="card-note">
+          In many RoPE models, 75% of heads are "local-only" and can be collapsed to save RAM. We masked each of Inkling's <strong>64 full-attention KV heads</strong> one by one to check. Slide the KL cutoff below to see which heads survive—and notice the honest catch: <strong>almost every head carries 60–94% far attention mass</strong>, so dropping half the heads blows up error (<code>KL 0.58–0.64</code>). Keeping all 64 heads and compressing pages works far better.
+        </p>
+        <div class="slider-grid">
+          <div class="slider-box">
+            <label for="duoThresh">Collapse heads with single-head KL &lt; <span id="duoThreshVal" class="slider-val">0.0060</span></label>
+            <input id="duoThresh" type="range" min="0" max="0.028" step="0.0005" value="0.006">
+          </div>
+          <div class="slider-box">
+            <label>Preset Cuts</label>
+            <div class="seg-group" id="duoPresets">
+              <button class="seg-btn" data-t="0" type="button">Keep All (64/64)</button>
+              <button class="seg-btn active" data-t="0.006" type="button">Bottom ~25%</button>
+              <button class="seg-btn" data-t="0.010" type="button">50% Cut</button>
+              <button class="seg-btn" data-t="0.014" type="button">Top 25%</button>
+            </div>
+          </div>
+        </div>
+        <div id="doodad1Heatmap" class="svg-wrap"></div>
+        <div class="metric-strip" id="doodad1Stats"></div>
+      </div>
+
+      <!-- Rotated Quant & Sparse Retrieval -->
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title">Rotated WHT-128 + Lloyd-Max Quantization</h3>
+            <span class="pill pill-emerald">SWA Outer K3V2: KL 0.00405 (23/24)</span>
+          </div>
+          <p class="card-note">
+            Why rotation helps: raw K/V vectors have sharp outlier spikes that ruin low-bit rounding. Applying a fast Walsh-Hadamard transform (<code>WHT_128</code>) with random ±1 signs smears spikes evenly into a clean bell curve, so <strong>Lloyd-Max Gaussian buckets</strong> fit tightly. Even better: compressing the outer 768 tokens of all 40 SWA rings to <code>K3V2</code> or <code>K2V2</code> barely moves logits at all!
+          </p>
+          <div id="chartAct1Quant" class="svg-wrap"></div>
+          <div class="table-wrap" style="margin-top:12px">
+            <table>
+              <thead>
+                <tr><th>Config (24 decode steps)</th><th class="num">Bits/val</th><th class="num">256K Size</th><th class="num">Mean KL</th><th class="num">Argmax</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>K4V4 uniform (no rotation)</td><td class="num">4.125</td><td class="num">2,112 MiB</td><td class="num">0.01640</td><td class="num">20/24</td></tr>
+                <tr class="row-hi"><td>K4V4 WHT-LloydMax</td><td class="num">4.125</td><td class="num">2,112 MiB</td><td class="num">0.01150</td><td class="num">21/24</td></tr>
+                <tr><td>K3V3 WHT-LloydMax</td><td class="num">3.125</td><td class="num">1,600 MiB</td><td class="num">0.02382</td><td class="num">20/24</td></tr>
+                <tr class="row-hi"><td>Tiered: far K3V2 + loc FP16</td><td class="num">2.677</td><td class="num">1,371 MiB</td><td class="num">0.03200</td><td class="num">20/24</td></tr>
+                <tr><td>K1+QJL1 / V2 (unbiased dot)</td><td class="num">2.188</td><td class="num">1,120 MiB</td><td class="num">0.12152</td><td class="num">20/24</td></tr>
+                <tr><td>K2V2 WHT-LloydMax (no QJL)</td><td class="num">2.125</td><td class="num">1,088 MiB</td><td class="num">0.16225</td><td class="num">17/24</td></tr>
+                <tr class="row-hi"><td>SWA outer (256..1024) K3V2</td><td class="num">5.969</td><td class="num">59.7 MiB</td><td class="num">0.00405</td><td class="num">23/24</td></tr>
+                <tr><td>SWA outer (256..1024) K2V2</td><td class="num">5.594</td><td class="num">55.9 MiB</td><td class="num">0.00798</td><td class="num">22/24</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title">Sparse Top-K Page Retrieval vs. Static Centroids</h3>
+            <span class="pill pill-cyan">73.3× Smaller · KL 0.038</span>
+          </div>
+          <p class="card-note">
+            Static No-RoPE centroid merging (averaging distant keys ahead of time) <strong>failed cleanly</strong> (<code>KL 0.60–1.06</code>) because you can't guess which exact detail a future query needs. Instead, keeping a tiny <code>WHT-2bit-sketch</code> index in RAM and pulling just the <strong>top 5% pages in WHT-3b</strong> (plus 1 background average) cut active Full KV to <strong>111.7 MiB</strong> at <strong>KL 0.038 (22/24)</strong>—beating Quest 10% FP16 by 2.6× on accuracy at 7.6× less RAM.
+          </p>
+          <div id="chartAct1Sparse" class="svg-wrap"></div>
+          <div class="callout fail" style="margin-top:12px">
+            <div class="callout-title">Honest Failure · Static Centroid Merging</div>
+            <div>Even at gentle 8× merging (1,056 MiB FP16), static centroids hit <strong>KL 0.603 (15/24)</strong>; at 32×–64× they collapsed to <strong>KL 1.05–1.06</strong>. Dynamic per-step page retrieval won by more than 15× on KL.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cross-Pass & DC Key Mean -->
+      <div class="card">
+        <div class="card-head">
+          <h3 class="card-title">Two Hidden Goldmines: Constant DC Key Mean (24–49.6%) &amp; Cross-Pass Predictability</h3>
+          <span class="pill pill-emerald">Free SNR Boost</span>
+        </div>
+        <p class="card-note">
+          <strong>Why subtracting the average key is free math:</strong> in softmax attention, subtracting the same average key vector <code>μ</code> from every key shifts every dot product by the exact same constant <code>q·μ</code>, which cancels out cleanly (you only add <code>−q·μ</code> to the learned sink score). That one subtraction removes <strong>24%–37% of all key energy</strong> (peaking at <strong>49.6%</strong> on slot 0 head 0!) before quantization even starts. Meanwhile, across Inkling's 3 loop passes, <code>blk.17</code> keys correlate at <strong>cos = +0.905</strong> (out-of-sample linear <strong>R² = 0.742</strong>, up to <strong>0.813</strong> on head 5).
+        </p>
+        <div id="chartAct1DcCross" class="svg-wrap"></div>
+      </div>
+
+      <!-- DOODAD 2: 24-Layer MoE Expert Zipf Explorer -->
+      <div class="doodad">
+        <div class="card-head">
+          <h3 class="card-title">Interactive Doodad #2 · 24-Layer MoE Expert Zipf Explorer</h3>
+          <span class="doodad-badge">Interactive · All 24 Real Physical Layers</span>
+        </div>
+        <p class="card-note">
+          We traced 408 real prompt + decode tokens across all 24 physical layers (128 experts/layer, top-8). Experts are <em>not</em> uniformly used: <strong><code>blk.18</code> has Zipf α = 1.54</strong> (top 32 experts cover <strong>86.9%</strong> of traffic), and <strong><code>blk.17</code> activates only 46.1/128 experts at B=64</strong>. During decode-only, mean entropy drops further to <code>5.34 bits</code> (Top-32 = 84.0%).
+        </p>
+        <div class="ctrl-row">
+          <div class="seg-group" id="zipfMetric">
+            <button class="seg-btn active" data-m="alpha" type="button">Zipf α</button>
+            <button class="seg-btn" data-m="h" type="button">Entropy H (bits)</button>
+            <button class="seg-btn" data-m="t32" type="button">Top-32 Share %</button>
+            <button class="seg-btn" data-m="b8" type="button">Active @ B=8</button>
+            <button class="seg-btn" data-m="b32" type="button">Active @ B=32</button>
+            <button class="seg-btn" data-m="b64" type="button">Active @ B=64</button>
+            <button class="seg-btn" data-m="b256" type="button">Active @ B=256</button>
+          </div>
+        </div>
+        <div id="doodad2Zipf" class="svg-wrap"></div>
+      </div>
+    </section>
+
+    <!-- ACT 2 -->
+    <section id="act2" class="act">
+      <div class="act-head">
+        <div class="act-tag">Act 2 · Disk Expert Offloading (bench-offload)</div>
+        <h2>Bit-Exact (0.00e0) SSD Expert Offloading &amp; Layer-Pipelined Macro-Batching</h2>
+        <p class="act-lead">
+          15.2 GiB of Inkling's 16.3 GiB weights are MoE experts. We built an OOM-safe offloader using <code>F_NOCACHE</code> reads, <code>MADV_DONTNEED</code> page eviction, and a fixed 1.38 GiB double-buffered staging ring—verifying <strong>bit-exact parity (max diff 0.000000e0, 16/16 argmax)</strong> against the resident GPU engine.
+        </p>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title">Mode A (Per-Step) vs. Mode C (Layer-Pipelined Macro-Batch)</h3>
+            <span class="pill pill-emerald">992.2 tok/s · Bit-Exact</span>
+          </div>
+          <p class="card-note">
+            <strong>Why Mode C works:</strong> reading a layer from SSD once per small batch wastes I/O. Instead, Mode C loads Layer <code>L</code> once and runs <code>M</code> micro-batches of 256 tokens through it (<code>B_macro = 512..4096</code>, needing only 16–126 MiB of inter-layer FP16 state) while streaming Layer <code>L+1</code> in the background. At <code>B_macro=2048</code>, <code>prelude_coda</code> hits <strong>992.2 tok/s</strong> and <code>all24</code> hits <strong>848.8 tok/s</strong>.
+          </p>
+          <div id="chartAct2Offload" class="svg-wrap"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title">Mode B: Zipf Hot/Cold Expert Cache Savings</h3>
+            <span class="pill pill-cyan">97.4% SSD Saved @ B=1</span>
+          </div>
+          <p class="card-note">
+            Pinning the 32 hottest experts per offloaded layer (only <strong>1.96 GiB RAM</strong>) eliminates <strong>97.4% of SSD reads at B=1</strong> (down to 208 MiB/step, 3.58× faster than full streaming) and <strong>80.9% at B=8</strong>. At large batches (B=64), coupon-collector spread shrinks savings to 38.0%—that's where Mode C macro-batching takes over.
+          </p>
+          <div id="chartAct2ZipfCache" class="svg-wrap"></div>
+          <div class="callout warn" style="margin-top:12px">
+            <div class="callout-title">Honest Caveat · Warm macOS Page Cache vs. Cold NAND</div>
+            <div>
+              In the sweep log, 15.2 GiB of GGUF pages were already warm in macOS's Unified Buffer Cache (UBC) from the earlier probe, yielding 29–50 GiB/s reads. A standalone cold <code>F_GLOBAL_NOCACHE</code> check measured <strong>7.76 GiB/s</strong> (1 thread) / ~8–14 GiB/s true cold NAND. Crucially, Mode C <em>still hides cold NAND</em>: 7.83 GiB at 8 GiB/s takes ~980 ms, completely tucked behind <code>B_macro=2048</code>'s 2,050 ms GPU compute!
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DOODAD 3: Layer-Pipelined Disk Offload Overlap Calculator -->
+      <div class="doodad">
+        <div class="card-head">
+          <h3 class="card-title">Interactive Doodad #3 · Layer-Pipelined Disk Offload Overlap Calculator</h3>
+          <span class="doodad-badge">Interactive · Cold vs. Warm SSD Physics</span>
+        </div>
+        <p class="card-note">
+          Explore the exact compute-vs-I/O overlap window. Drag SSD bandwidth down to true cold NAND (<strong>8 GiB/s</strong>) and sweep <code>B_macro</code> to see where GPU compute completely hides disk reads.
+        </p>
+        <div class="slider-grid">
+          <div class="slider-box">
+            <label for="offBmacro">Macro Batch Size (B_macro) <span id="offBmacroVal" class="slider-val">2,048</span></label>
+            <input id="offBmacro" type="range" min="64" max="4096" step="64" value="2048">
+          </div>
+          <div class="slider-box">
+            <label for="offBw">Effective SSD Read Bandwidth <span id="offBwVal" class="slider-val">8.0 GiB/s</span></label>
+            <input id="offBw" type="range" min="7.5" max="45" step="0.5" value="8.0">
+          </div>
+          <div class="slider-box">
+            <label>Offload Policy &amp; SSD Presets</label>
+            <div class="seg-group" id="offPolicy">
+              <button class="seg-btn active" data-p="prelude_coda" type="button">prelude_coda (7.83 GiB)</button>
+              <button class="seg-btn" data-p="all24" type="button">all24 (29.9 GiB)</button>
+            </div>
+            <div class="seg-group" id="offPresets" style="margin-top:4px">
+              <button class="seg-btn active" data-bw="8" type="button">Cold NAND 8G</button>
+              <button class="seg-btn" data-bw="12" type="button">Fast Cold 12G</button>
+              <button class="seg-btn" data-bw="29" type="button">Warm UBC 29G</button>
+            </div>
+          </div>
+        </div>
+        <div id="doodad3Offload" class="svg-wrap"></div>
+        <div class="metric-strip" id="doodad3Stats"></div>
+      </div>
+    </section>
+
+    <!-- ACT 3 -->
+    <section id="act3" class="act">
+      <div class="act-head">
+        <div class="act-tag">Act 3 · Batched MoE Kernel Experiment &amp; FP16 Conv State (bench-moe-opt)</div>
+        <h2>FP16 Conv State Won Cleanly (−468 MiB); 6-Class Small-Tile MoE Lost to 4-Class</h2>
+        <p class="act-lead">
+          Good engineering means reporting what lost too. We tested two ideas together: shrinking the recurrent short-conv pool from FP32 to FP16, and splitting sparse 3–16 token MoE tiles into a 6-class router (<code>route6</code>) with zero-staging direct kernels.
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3 class="card-title"><code>route4</code> (Existing) vs. <code>route6</code> (New) + FP16 <code>CS_POOL</code> Savings</h3>
+          <div class="seg-group" id="moeOptMetric">
+            <button class="seg-btn active" data-k="tps" type="button">Total tok/s (Higher Better)</button>
+            <button class="seg-btn" data-k="gu" type="button">gate_up ms (Lower Better)</button>
+            <button class="seg-btn" data-k="dn" type="button">down ms (Lower Better)</button>
+          </div>
+        </div>
+        <p class="card-note">
+          <strong>Why <code>route4</code> won:</strong> Apple M5 Pro loves 128-thread coalesced <code>Q4_K</code> weight staging into threadgroup SRAM. Breaking ragged experts into 6 separate indirect kernel launches hurt memory coalescing and added extra barrier overhead—only <code>dn</code> at B=32 edged ahead (1.05×), while total throughput dropped 5–8%. Meanwhile, <strong>FP16 <code>CS_POOL</code></strong> halved conv state RAM (saving <strong>468 MiB at B=256</strong>) at <code>rel_L2 = 0.000098</code>.
+        </p>
+        <div id="chartAct3Moe" class="svg-wrap"></div>
+        <div class="grid-2" style="margin-top:14px">
+          <div class="callout win">
+            <div class="callout-title">Kept · FP16 CS_POOL</div>
+            <div>Cut per-instance conv state from <strong>3.83 → 1.83 MiB</strong> (<code>−117 MiB</code> @ B=64, <code>−468 MiB</code> @ B=256) with numerical error <code>rel_L2 = 0.000098</code>. Adopted permanently in the 256K engine.</div>
+          </div>
+          <div class="callout fail">
+            <div class="callout-title">Rejected · 6-Class MoE Router (route6)</div>
+            <div>Lost across the board: <code>1,155.2 → 1,098.7 tok/s</code> at B=256 (0.95×), <code>532.3 → 490.9</code> at B=64 (0.92×). We kept the faster, simpler <code>route4</code> path.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ACT 4 -->
+    <section id="act4" class="act">
+      <div class="act-head">
+        <div class="act-tag">Act 4 · Multi-Agent KV Sharing (kv-share-probe)</div>
+        <h2>TokenDance + KVCOMM on Zero-RoPE Inkling: 64×–256× Sharing &amp; 1.28× Faster Attention</h2>
+        <p class="act-lead">
+          What if 64 agents with completely different system prompts and tool histories all read the same codebase? On RoPE models, shifting a shared document by 500 tokens breaks its KV keys. On Inkling 2 Mini, <strong>Zero RoPE + 40 SWA</strong> turns cross-prefix reuse into a cheat code.
+        </p>
+      </div>
+
+      <div class="callout info">
+        <div class="callout-title">Why Zero RoPE Makes Blocks Plug-and-Play (Plain English)</div>
+        <div>
+          When Agent 0 reads a 3,965-token dossier after a 137-token prefix, and Agent 4 reads the exact same dossier after a 725-token prefix (<strong>+588 tokens shifted</strong>), normal LLMs have baked different rotary angles into every key. Inkling stores <strong>pure content vectors with zero RoPE</strong>—and 40 of its 48 layers can't even look back past 1,024 tokens. So pasting Agent 0's Master block straight into Agents 1–4 with <strong>0% recompute</strong> already matches <strong>95 of 96</strong> next tokens (<code>KL 0.0081</code>)!
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title">TokenDance Diff Sweep: Check-Layer (<code>blk.5</code>) vs. Oracle</h3>
+            <span class="pill pill-violet">96/96 Argmax @ 2% Diff</span>
+          </div>
+          <p class="card-note">
+            <code>blk.5</code> is the very first Full-attention layer (6 of 48 slots in). Using it as an early filter to spot and selectively recompute just <strong>2%–10%</strong> of drifted tokens drives error down to <strong>KL 0.0049–0.0083</strong> while cutting 64-agent 256K memory from 522 GiB down to <strong>8–60 GiB</strong>.
+          </p>
+          <div id="chartAct4Diff" class="svg-wrap"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title">Fused GPU Attention: <code>k_attn_master_diff_b</code> (B=64, L=4096)</h3>
+            <span class="pill pill-emerald">1.28× Faster &amp; 60× Less RAM</span>
+          </div>
+          <p class="card-note">
+            Sharing a single read-only Master block doesn't just save RAM—it runs <strong>faster</strong> on GPU. All 64 agents stream the same <strong>136 MiB</strong> Master copy hot out of Apple Silicon's L2/SLC cache instead of thrashing <strong>8.19 GiB</strong> of separate copies across DRAM.
+          </p>
+          <div id="chartAct4Fused" class="svg-wrap"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3 class="card-title">KVCOMM Online Anchor-Pool on Held-Out Agent 4 (725-tok Private Prefix)</h3>
+          <span class="pill pill-emerald">24/24 Argmax Across All Modes</span>
+        </div>
+        <p class="card-note">
+          KVCOMM learns tiny per-bucket mean offset vectors from Agents 1–3 and applies them to unseen Agent 4 (anchor similarity <code>0.892</code>). Combining KVCOMM offsets with a 5% <code>blk.5</code> TokenDance diff achieves <strong>KL 0.00605 (24/24)</strong> at <strong>15.4×–18.6×</strong> multi-agent compression.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Method (Held-Out Agent 4, 3,965-tok shared S)</th><th class="num">Mean KL</th><th class="num">Worst KL</th><th class="num">Argmax</th><th class="num">N=64 @ 256K</th><th class="num">N=256 @ 256K</th><th class="num">Prefill Speedup*</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>1. Full Recompute (Ground Truth)</td><td class="num">0.00000</td><td class="num">0.00000</td><td class="num">24/24</td><td class="num">1.0×</td><td class="num">1.0×</td><td class="num">1.00×</td></tr>
+              <tr><td>2. Naive Direct Master Paste (0% diff)</td><td class="num">0.00651</td><td class="num">0.04945</td><td class="num">24/24</td><td class="num">64.0×</td><td class="num">255.8×</td><td class="num">1.00×</td></tr>
+              <tr><td>3. KVCOMM Anchor Offset (0% recompute)</td><td class="num">0.00781</td><td class="num">0.08096</td><td class="num">24/24</td><td class="num">63.8×</td><td class="num">253.6×</td><td class="num">227×*</td></tr>
+              <tr class="row-hi"><td>4. Hybrid KVCOMM + TokenDance 5%</td><td class="num">0.00605</td><td class="num">0.06283</td><td class="num">24/24</td><td class="num">15.4×</td><td class="num">18.6×</td><td class="num">5.93×*</td></tr>
+              <tr><td>5. Hybrid KVCOMM + TokenDance 10%</td><td class="num">0.00647</td><td class="num">0.06144</td><td class="num">24/24</td><td class="num">8.8×</td><td class="num">9.7×</td><td class="num">4.71×*</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout warn" style="margin-top:12px">
+          <div class="callout-title">Honest Caveat · Measured vs. Projected</div>
+          <div>Quality/KL (<code>24/24</code>), GPU diff extraction (<code>max_err 8.94e-8</code>), and fused decode attention speed (<code>1.28×</code> faster) were measured directly on GPU. The <code>5.93×</code> / <code>227×</code> prefill speedups are projected from Agent 4's measured full prefill (<code>2,273.7 ms</code>) vs selective-recompute cost; the selective prefill scheduler itself still needs to be wired into <code>BatchEngine</code>.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ACT 5 -->
+    <section id="act5" class="act">
+      <div class="act-head">
+        <div class="act-tag">Act 5 · Live 256K Tiered KV Engine v1 → v2 (bench-256k)</div>
+        <h2>From 8.16 GiB → 109 MiB per 256K Session (76.7×) &amp; 96 Independent Live Sessions</h2>
+        <p class="act-lead">
+          First we fixed the 32-bit 256K crash and built v1 (<code>WHT-KV4/KV2</code> + Quest scoring + NVMe cold spill). Then we upgraded v2 with every single Act 1 winner: <strong><code>WHT-K3V2</code></strong> + <strong>DC key mean subtraction</strong> + <strong><code>WHT-2bit-sketch</code></strong> + <strong>Tiered SWA</strong>. RAM dropped to <strong>109 MiB/instance</strong> while error fell to <strong>KL 0.0181 (16/16)</strong>.
+        </p>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title">Memory Waterfall: Per-256K Independent Instance</h3>
+            <span class="pill pill-cyan">8,361 → 109 MiB (76.7×)</span>
+          </div>
+          <p class="card-note">
+            Every 256K session parks its compressed cold pages on NVMe (<code>F_NOCACHE</code>, zero OS bloat) and holds only 4 lightweight pieces in RAM: <strong>Tiered SWA (38.8 MiB)</strong>, <strong>FP16 CS (1.83 MiB)</strong>, <strong>WHT-2bit Sketch Index (52.0 MiB)</strong>, and <strong>Hot Top-K + Local pages (16.4 MiB)</strong>.
+          </p>
+          <div id="chartAct5Waterfall" class="svg-wrap"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title">Real 48-Layer End-to-End Logit KL Ablation (n=4096, 16 steps)</h3>
+            <span class="pill pill-emerald">All 4 Configs: 16/16 Argmax</span>
+          </div>
+          <p class="card-note">
+            Every v2 upgrade earned its keep in a live 48-layer GPU ablation (Top-K = 8 of 48 far pages = 16.7% active): <strong>DC key mean subtraction cut KL by 1.76×</strong> (<code>0.0319 → 0.0181</code>), and <strong><code>WHT-2bit-sketch</code> beat Quest by 2.78×</strong> (<code>0.0503 → 0.0181</code>).
+          </p>
+          <div id="chartAct5Ablation" class="svg-wrap"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3 class="card-title">Live 48-Layer Batched Decode at True <code>ctx = 262,144</code> (v2 Engine)</h3>
+          <span class="pill pill-emerald">Zero OOM · 12–15 ms F_NOCACHE Wave-Swap</span>
+        </div>
+        <p class="card-note">
+          Real end-to-end 48-layer decode runs at 262,144 tokens inside a hard <code>12.0 GiB</code> cap. <strong>96 completely independent 256K conversations</strong> run simultaneously in <strong>10.45 GiB</strong> at <strong>371.4 tok/s</strong> (vs 784 GiB FP16). With radix prefix sharing, <strong>128 sessions (33.5M active tokens)</strong> run in <strong>6.37 GiB</strong> (<strong>164× smaller</strong> than 1.04 TiB FP16). Swapping a paused 256K session (92.6 MiB record) to/from NVMe takes just <strong>11.97 ms out / 15.02 ms in</strong>, cleanly dropping <code>phys_footprint</code> from 6.74 GiB back to 0.74 GiB.
+        </p>
+        <div id="chartAct5Live" class="svg-wrap"></div>
+      </div>
+
+      <!-- DOODAD 4: 256K+ Multi-Instance Capacity & RAM Simulator -->
+      <div class="doodad">
+        <div class="card-head">
+          <h3 class="card-title">Interactive Doodad #4 · 256K+ Multi-Instance Capacity &amp; RAM Simulator</h3>
+          <span class="doodad-badge">Interactive · Exact Pool Accounting</span>
+        </div>
+        <p class="card-note">
+          Dial in context length, active sessions, KV codec, sharing mode, and unified RAM to see the exact memory breakdown (Model Weights + SWA + Index + Hot Active + CS), compression ratio vs FP16, max sessions that fit live, and <code>F_NOCACHE</code> wave-swap cost.
+        </p>
+        <div class="slider-grid">
+          <div class="slider-box">
+            <label for="simCtx">Context Length <span id="simCtxVal" class="slider-val">256K</span></label>
+            <input id="simCtx" type="range" min="0" max="6" step="1" value="4">
+          </div>
+          <div class="slider-box">
+            <label for="simInst">Live Instances <span id="simInstVal" class="slider-val">96</span></label>
+            <input id="simInst" type="range" min="1" max="512" step="1" value="96">
+          </div>
+          <div class="slider-box">
+            <label for="simCodec">KV Engine / Codec</label>
+            <select id="simCodec" class="ui-select">
+              <option value="v2" selected>v2: WHT-K3V2 + WHT2-sk + TierSWA (109 MiB@256K)</option>
+              <option value="v1_kv2">v1: WHT-KV2 + Quest + KV8 SWA (172 MiB@256K)</option>
+              <option value="v1_kv4">v1: WHT-KV4 + Quest + FP16 SWA (308 MiB@256K)</option>
+              <option value="kv8">Dense KV8 (4.08 GiB@256K)</option>
+              <option value="fp16">Dense FP16 (8.16 GiB@256K)</option>
+            </select>
+          </div>
+          <div class="slider-box">
+            <label for="simShare">Cross-Instance Sharing</label>
+            <select id="simShare" class="ui-select">
+              <option value="indep" selected>Independent (0% shared)</option>
+              <option value="radix">Radix Shared Prefix (75% shared)</option>
+              <option value="td2">TokenDance 2% Diff (shared repo/doc)</option>
+              <option value="td0">TokenDance 0% + KVCOMM (pure master)</option>
+            </select>
+          </div>
+          <div class="slider-box">
+            <label for="simRam">System Unified RAM</label>
+            <div class="seg-group" id="simRamBtns">
+              <button class="seg-btn" data-r="24" type="button">24G</button>
+              <button class="seg-btn active" data-r="48" type="button">48G</button>
+              <button class="seg-btn" data-r="64" type="button">64G</button>
+              <button class="seg-btn" data-r="128" type="button">128G</button>
+            </div>
+          </div>
+        </div>
+        <div id="doodad4Ram" class="svg-wrap"></div>
+        <div class="metric-strip" id="doodad4Stats"></div>
+      </div>
+    </section>
+
+    <!-- ACT 6 -->
+    <section id="act6" class="act">
+      <div class="act-head">
+        <div class="act-tag">Act 6 · Pre-Compiled .ikv File Cartridges, 50K 2-Hop Agent Demo &amp; inkling-ikv</div>
+        <h2>Compile Source Files Once, Mount 50,252 Tokens in 0.80 Seconds (38.2× Faster)</h2>
+        <p class="act-lead">
+          That led to the night's wildest question: <em>"If Zero RoPE makes KV blocks position-independent, can we pre-compile code files into <code>.ikv</code> cartridges and let agents mount them instantaneously instead of re-reading text?"</em> We built it, verified it, spun it out into standalone <strong><code>inkling-ikv</code></strong>, and ran a real 50K 2-hop agent test back-to-back.
+        </p>
+      </div>
+
+      <!-- IKV1 Layout Diagram + 3-File Parity -->
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title"><code>IKV1</code> 4 KiB-Aligned Cartridge Layout</h3>
+            <span class="pill pill-cyan">256K: 1.38 GiB Disk · 64.2 MiB RAM Mount</span>
+          </div>
+          <p class="card-note">
+            Every section is 4096-byte aligned and opened with <code>F_NOCACHE</code>. When stitching multiple files <code>[f1, f2, ..., fn]</code>, <strong>earlier files skip their SWA tail and conv state entirely</strong>—only the final ≤1,024 tokens enter the 40 sliding-window rings!
+          </p>
+          <div id="chartAct6Layout" class="svg-wrap"></div>
+          <div class="table-wrap" style="margin-top:12px">
+            <table>
+              <thead>
+                <tr><th>256K Archive Format</th><th class="num">Full Pages</th><th class="num">SWA Tail</th><th class="num">Sketches</th><th class="num">Total Disk</th><th class="num">RAM Mount</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>FP16 (Archival, bit-exact)</td><td class="num">8.00 GiB</td><td class="num">160.0 MiB</td><td class="num">36.0 MiB</td><td class="num">8.20 GiB</td><td class="num">199.7 MiB</td></tr>
+                <tr><td>WHT_KV4 (4-bit Lloyd-Max)</td><td class="num">2.06 GiB</td><td class="num">41.3 MiB</td><td class="num">36.0 MiB</td><td class="num">2.14 GiB</td><td class="num">79.2 MiB</td></tr>
+                <tr class="row-hi"><td>WHT_K3V2 (Default)</td><td class="num">1.31 GiB</td><td class="num">26.3 MiB</td><td class="num">36.0 MiB</td><td class="num">1.38 GiB</td><td class="num">64.2 MiB</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3 class="card-title">3-File Standalone Stitching Check (<code>kv-pack-check</code>)</h3>
+            <span class="pill pill-emerald">1-File FP16: 0.00e0 Bit-Exact</span>
+          </div>
+          <p class="card-note">
+            Three separate Rust files (5,769 file tokens, 5,914 total) were compiled completely blind, then stitched behind a fresh system prompt. <strong><code>WHT-K3V2 (seam=0)</code> hit 32/32 exact argmax</strong> at <strong>5.8× smaller</strong> disk and <strong>7.52× faster TTFT</strong>. Prefix-conditioned BOS sink stripping cut FP16 stitching KL in half (<code>0.029 → 0.0149</code>).
+          </p>
+          <div id="chartAct6Check" class="svg-wrap"></div>
+        </div>
+      </div>
+
+      <!-- DOODAD 5: Live 50K 2-Hop Agent Side-by-Side Inspector -->
+      <div class="doodad">
+        <div class="card-head">
+          <h3 class="card-title">Interactive Doodad #5 · Real 50K 2-Hop Codebase Agent Inspector</h3>
+          <span class="doodad-badge">Interactive · Real Measured Runs</span>
+        </div>
+        <p class="card-note">
+          We packed real <code>inkling-engine/src/main.rs</code> (<strong>26,922 tok</strong>, 1,005 → 170.1 MiB) and <code>src/persona.rs</code> (<strong>23,330 tok</strong>, 893 → 151.2 MiB) once, then ran the exact same 2-hop codebase agent task <strong>WITH <code>.ikv</code></strong> vs <strong>WITHOUT <code>.ikv</code></strong> (identical system prompt, <code>--effort low</code>, greedy). Total prefill wait dropped from <strong>44.30 s → 1.36 s (32.6× faster)</strong> with <strong>6/6 verbatim facts</strong> retrieved up to 47,500 tokens past the 1,024-token SWA window!
+        </p>
+
+        <div class="ctrl-row" style="justify-content:space-between">
+          <div class="seg-group" id="hopTabs">
+            <button class="seg-btn active" data-hop="2" type="button">Hop 2 · 50.3K Stitched (38.2× Faster)</button>
+            <button class="seg-btn" data-hop="1" type="button">Hop 1 · 27.0K main.rs (24.7× Faster)</button>
+          </div>
+          <div class="seg-group" id="modeTabs">
+            <button class="seg-btn active" data-mode="with" type="button">WITH .ikv (WHT-K3V2)</button>
+            <button class="seg-btn" data-mode="without" type="button">WITHOUT .ikv (Raw Prefill)</button>
+          </div>
+        </div>
+
+        <div id="doodad5Bars" class="svg-wrap"></div>
+        <div id="doodad5Timeline" class="svg-wrap" style="margin-top:12px"></div>
+        <div id="doodad5Facts" class="fact-grid"></div>
+        <div style="margin-top:12px">
+          <div class="m-lbl" id="doodad5OutLabel" style="font-family:var(--font-mono);font-size:0.72rem;color:var(--text-faint);margin-bottom:6px;text-transform:uppercase"></div>
+          <pre id="doodad5Output" class="output-box"></pre>
+        </div>
+      </div>
+
+      <!-- DOODAD 6: .ikv Repo Cartridge & TTFT Speedup Calculator -->
+      <div class="doodad">
+        <div class="card-head">
+          <h3 class="card-title">Interactive Doodad #6 · <code>.ikv</code> Repo Cartridge &amp; TTFT Speedup Calculator</h3>
+          <span class="doodad-badge">Interactive · Quadratic Prefill vs. Linear Mount</span>
+        </div>
+        <p class="card-note">
+          Notice why speedup jumped from <code>24.7×</code> at 27K to <code>38.2×</code> at 50K: raw prefill slows down quadratically with attention (<code>1,960 → 1,629 tok/s</code>), while <code>.ikv</code> mounting stays linear (~130K eff tok/s). Estimate any repo size and multi-hop agent run below.
+        </p>
+        <div class="slider-grid">
+          <div class="slider-box">
+            <label for="ikvToks">Repo / Context Size <span id="ikvToksVal" class="slider-val">64K tok</span></label>
+            <input id="ikvToks" type="range" min="4" max="256" step="4" value="64">
+          </div>
+          <div class="slider-box">
+            <label for="ikvHops">Agent Read Hops <span id="ikvHopsVal" class="slider-val">3 hops</span></label>
+            <input id="ikvHops" type="range" min="1" max="8" step="1" value="3">
+          </div>
+          <div class="slider-box">
+            <label for="ikvFmt">Cartridge Format</label>
+            <select id="ikvFmt" class="ui-select">
+              <option value="k3v2" selected>WHT-K3V2 (Default, 6.1× smaller)</option>
+              <option value="k3v2_prune">WHT-K3V2 + kvprune 25% (~22× smaller)</option>
+              <option value="kv4">WHT-KV4 (3.9× smaller)</option>
+              <option value="fp16">FP16 Archival (1.0×, bit-exact)</option>
+            </select>
+          </div>
+        </div>
+        <div id="doodad6Chart" class="svg-wrap"></div>
+        <div class="metric-strip" id="doodad6Stats"></div>
+      </div>
+
+      <!-- Repo Split & Shadow KV-LSP -->
+      <div class="card">
+        <div class="card-head">
+          <h3 class="card-title">Standalone <code>inkling-ikv</code> Split, GPL-3.0 Release &amp; Shadow KV-LSP Design</h3>
+          <span class="pill pill-violet">DESIGN.md Ready</span>
+        </div>
+        <p class="card-note">
+          We tightened <code>inkling-engine/README.md</code> (228 → 98 lines) and pushed <strong>GPL-3.0-or-later</strong> cleanly to <code>origin/main</code> without staging any WIP code. Then we spun <code>.ikv</code> out into sibling crate <strong><code>inkling-ikv</code></strong> (<code>pack / read / inspect / check</code>, 0 warnings, sharing <code>inkling-engine</code> via <code>lib.rs</code>) and drafted the <strong>Shadow KV-LSP</strong> architecture so any unmodified coding harness gets instant reads during compile/test idle time:
+        </p>
+        <div id="chartAct6Shadow" class="svg-wrap"></div>
+      </div>
+    </section>
+
+    <!-- EPILOGUE -->
+    <section id="epilogue" class="act">
+      <div class="act-head">
+        <div class="act-tag">Epilogue · Honest Scorecard</div>
+        <h2>What Worked, What Failed &amp; Where the Numbers Stand</h2>
+        <p class="act-lead">
+          A single plainspoken ledger of every major bet from the night—wins, losses, and caveats side by side.
+        </p>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Experiment / Mechanism</th><th>Verdict</th><th>Measured Result</th><th>Honest Caveat / Why</th></tr>
+            </thead>
+            <tbody>
+              <tr class="row-hi"><td><strong>WHT-K3V2 + DC Mean + WHT2-Sketch + TierSWA</strong></td><td><span class="pill pill-emerald">WIN</span></td><td><code>109 MiB</code> / 256K (<strong>76.7×</strong>), <code>KL 0.0181</code>, <code>16/16</code></td><td>96 live independent 256K sessions in 10.45 GiB; cold pages stay on F_NOCACHE NVMe.</td></tr>
+              <tr class="row-hi"><td><strong>Pre-compiled <code>.ikv</code> Cartridges (<code>inkling-ikv</code>)</strong></td><td><span class="pill pill-emerald">WIN</span></td><td><strong>38.2× faster</strong> TTFT @ 50.3K (<code>30.53s → 0.80s</code>), 6/6 verbatim</td><td>Needs 1-time offline/idle pack; earlier files don't attend to later ones until query time.</td></tr>
+              <tr class="row-hi"><td><strong>TokenDance + KVCOMM + Fused GPU Kernel</strong></td><td><span class="pill pill-emerald">WIN</span></td><td><code>KL 0.0049–0.0081</code>, <code>95–96/96</code>, <strong>1.28× faster</strong> attn, 60× RAM</td><td>5.93×/227× prefill speedups are projected; selective-recompute scheduler not wired yet.</td></tr>
+              <tr class="row-hi"><td><strong>Layer-Pipelined Disk Expert Offload (Mode C)</strong></td><td><span class="pill pill-emerald">WIN</span></td><td><strong>992 tok/s</strong> (7.8G off), <strong>849 tok/s</strong> (15.2G off), <code>0.00e0</code> bit-exact</td><td>Bench hit warm UBC; on cold 8 GiB/s NAND, B_macro≥2048 still hides 7.8G completely.</td></tr>
+              <tr class="row-hi"><td><strong>FP16 Conv State Pool (<code>CS_POOL</code>)</strong></td><td><span class="pill pill-emerald">WIN</span></td><td><strong>2× smaller</strong> (<code>−468 MiB</code> @ B=256), <code>rel_L2 0.000098</code></td><td>Zero speed penalty; drop-in replacement for FP32 conv state.</td></tr>
+              <tr class="row-bad"><td><strong>6-Class Small-Tile MoE Router (<code>route6</code>)</strong></td><td><span class="pill pill-rose">LOST</span></td><td><code>1,098.7</code> vs <code>1,155.2 tok/s</code> @ B=256 (−5% to −8%)</td><td>M5 Pro favors <code>route4</code>'s coalesced 128-thread SRAM Q4_K staging over extra dispatches.</td></tr>
+              <tr class="row-bad"><td><strong>Static No-RoPE Centroid Merging</strong></td><td><span class="pill pill-rose">LOST</span></td><td><code>KL 0.603–1.062</code> (<code>12–15/24</code> argmax)</td><td>Pre-averaging distant keys blurs rare needles; dynamic top-5% page retrieval won 15×.</td></tr>
+              <tr class="row-warn"><td><strong>DuoAttention 50% Head Pruning</strong></td><td><span class="pill pill-amber">MIXED</span></td><td><code>KL 0.582</code> at 50% heads; <code>0.101</code> at 75%</td><td>Almost all 64 Inkling heads carry 60–94% far mass—compress pages instead of dropping heads.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <footer>
+        <span>Generated from measured logs of <code>inkling-engine</code> &amp; <code>inkling-ikv</code> on Apple M5 Pro (48 GiB).</span>
+        <span>Zero external scripts · Zero CDNs · Works 100% offline</span>
+      </footer>
+    </section>
+  </main>
+</div>
+
+<div id="tooltip" class="tooltip" role="status" aria-live="polite"></div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ==================== THEME & SCROLL PROGRESS ====================
+  const htmlEl = document.documentElement;
+  const themeBtn = document.getElementById('themeBtn');
+  function updateThemeBtn() {
+    const isLight = htmlEl.getAttribute('data-theme') === 'light';
+    themeBtn.textContent = isLight ? '☾ Dark' : '☀ Light';
+  }
+  themeBtn.addEventListener('click', () => {
+    const next = htmlEl.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    htmlEl.setAttribute('data-theme', next);
+    updateThemeBtn();
+    renderAllDynamic();
+  });
+  updateThemeBtn();
+
+  const progressEl = document.getElementById('readProgress');
+  window.addEventListener('scroll', () => {
+    const h = document.documentElement.scrollHeight - window.innerHeight;
+    const pct = h > 0 ? Math.min(100, Math.max(0, (window.scrollY / h) * 100)) : 0;
+    progressEl.style.width = pct.toFixed(1) + '%';
+  }, { passive: true });
+
+  // ScrollSpy
+  const tocLinks = Array.from(document.querySelectorAll('.toc-link'));
+  const sections = tocLinks.map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+  if ('IntersectionObserver' in window) {
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          const id = '#' + e.target.id;
+          tocLinks.forEach(l => l.classList.toggle('active', l.getAttribute('href') === id));
+        }
+      });
+    }, { rootMargin: '-20% 0px -65% 0px', threshold: 0.01 });
+    sections.forEach(s => io.observe(s));
+  }
+
+  // ==================== TOOLTIP HELPER ====================
+  const tip = document.getElementById('tooltip');
+  function showTip(evt, title, rows) {
+    let html = '<div class="tt-h">' + title + '</div>';
+    for (let i = 0; i < rows.length; i++) {
+      html += '<div class="tt-row"><span>' + rows[i][0] + '</span><span>' + rows[i][1] + '</span></div>';
+    }
+    tip.innerHTML = html;
+    tip.classList.add('show');
+    moveTip(evt);
+  }
+  function moveTip(evt) {
+    const pad = 16;
+    const w = tip.offsetWidth || 220;
+    const h = tip.offsetHeight || 100;
+    let x = evt.clientX + 14;
+    let y = evt.clientY + 14;
+    if (x + w + pad > window.innerWidth) x = evt.clientX - w - 14;
+    if (y + h + pad > window.innerHeight) y = evt.clientY - h - 14;
+    tip.style.left = Math.max(8, x) + 'px';
+    tip.style.top = Math.max(8, y) + 'px';
+  }
+  function hideTip() { tip.classList.remove('show'); }
+
+  function bindHover(container) {
+    container.querySelectorAll('[data-tip]').forEach(el => {
+      el.style.cursor = 'pointer';
+      el.addEventListener('mouseenter', (e) => {
+        const d = JSON.parse(el.getAttribute('data-tip'));
+        showTip(e, d.t, d.r);
+      });
+      el.addEventListener('mousemove', moveTip);
+      el.addEventListener('mouseleave', hideTip);
+    });
+  }
+  function tipAttr(title, rows) {
+    return 'data-tip="' + JSON.stringify({ t: title, r: rows }).replace(/"/g, '&quot;') + '"';
+  }
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  // ==================== EXACT MEASURED DATASETS ====================
+
+  // Act 0: Batched decode baselines
+  const ACT0_BATCH_IND = [
+    { b: 1, tps: 31.8, ms: 31.98, per: 31.77 },
+    { b: 8, tps: 149.4, ms: 54.41, per: 18.67 },
+    { b: 16, tps: 245.0, ms: 66.34, per: 15.31 },
+    { b: 32, tps: 380.1, ms: 85.53, per: 11.88 },
+    { b: 64, tps: 603.8, ms: 107.67, per: 9.44 },
+    { b: 256, tps: 1077.4, ms: 237.62, per: 4.21 }
+  ];
+  const ACT0_BATCH_SHARED = [
+    { b: 1, tps: 31.8, ms: 31.97, per: 31.77 },
+    { b: 8, tps: 216.6, ms: 37.52, per: 27.08 },
+    { b: 16, tps: 424.6, ms: 38.28, per: 26.54 },
+    { b: 32, tps: 738.7, ms: 44.01, per: 23.08 },
+    { b: 64, tps: 1131.7, ms: 57.45, per: 17.68 },
+    { b: 128, tps: 1572.8, ms: 82.67, per: 12.29 }
+  ];
+
+  // Act 0: prof-batch breakdowns
+  const ACT0_PROF = {
+    '64': {
+      step: 114.73, tps: 557.8, mem: '3.48 GiB', tiles: '83/128 active',
+      items: [
+        { k: 'moe_gu', ms: 56.39, pct: 49.1, c: '--cyan' },
+        { k: 'moe_down', ms: 39.86, pct: 34.7, c: '--violet' },
+        { k: 'qkv', ms: 7.47, pct: 6.5, c: '--emerald' },
+        { k: 'ctrl_down', ms: 6.57, pct: 5.7, c: '--amber' },
+        { k: 'wo', ms: 4.13, pct: 3.6, c: '--emerald' },
+        { k: 'lm_head', ms: 3.86, pct: 3.4, c: '--rose' },
+        { k: 'router', ms: 2.70, pct: 2.4, c: '--amber' },
+        { k: 'attn', ms: 1.89, pct: 1.7, c: '--cyan' },
+        { k: 'other (mix/comb/topk)', ms: 3.26, pct: 2.8, c: '--text-faint' }
+      ]
+    },
+    '256': {
+      step: 237.62, tps: 1077.4, mem: '3.29 GiB', tiles: '112/128 active',
+      items: [
+        { k: 'moe_gu', ms: 95.85, pct: 40.3, c: '--cyan' },
+        { k: 'moe_down', ms: 66.16, pct: 27.8, c: '--violet' },
+        { k: 'qkv', ms: 18.83, pct: 7.9, c: '--emerald' },
+        { k: 'attn', ms: 16.37, pct: 6.9, c: '--cyan' },
+        { k: 'lm_head', ms: 11.68, pct: 4.9, c: '--rose' },
+        { k: 'wo', ms: 9.19, pct: 3.9, c: '--emerald' },
+        { k: 'ctrl_down', ms: 7.01, pct: 2.9, c: '--amber' },
+        { k: 'mix/comb/router', ms: 15.69, pct: 6.6, c: '--text-faint' }
+      ]
+    }
+  };
+
+  // Act 1: Exact 8x8 DuoAttention Single-Head KL Heatmap (steps/722/output.txt lines 51-58)
+  const DUO_SLOTS = [
+    { name: 'blk.05(pre)', slot: 5, slotKL: 0.13786, agree: '18/24', heads: [0.0119, 0.0061, 0.0094, 0.0066, 0.0083, 0.0108, 0.0082, 0.0120] },
+    { name: 'blk.11(p0)',  slot: 11, slotKL: 0.05027, agree: '20/24', heads: [0.0125, 0.0207, 0.0134, 0.0085, 0.0133, 0.0105, 0.0197, 0.0095] },
+    { name: 'blk.17(p0)',  slot: 17, slotKL: 0.03008, agree: '21/24', heads: [0.0216, 0.0126, 0.0199, 0.0135, 0.0076, 0.0063, 0.0107, 0.0145] },
+    { name: 'blk.23(coda)',slot: 23, slotKL: 0.47106, agree: '17/24', heads: [0.0062, 0.0037, 0.0064, 0.0060, 0.0049, 0.0138, 0.0271, 0.0088] },
+    { name: 'blk.11(p1)',  slot: 29, slotKL: 0.09473, agree: '21/24', heads: [0.0123, 0.0138, 0.0183, 0.0062, 0.0072, 0.0162, 0.0157, 0.0102] },
+    { name: 'blk.17(p1)',  slot: 35, slotKL: 0.02757, agree: '20/24', heads: [0.0148, 0.0061, 0.0069, 0.0149, 0.0001, 0.0012, 0.0072, 0.0091] },
+    { name: 'blk.11(p2)',  slot: 41, slotKL: 0.06671, agree: '21/24', heads: [0.0042, 0.0047, 0.0148, 0.0064, 0.0061, 0.0135, 0.0142, 0.0037] },
+    { name: 'blk.17(p2)',  slot: 47, slotKL: 0.04572, agree: '22/24', heads: [0.0087, 0.0022, 0.0032, 0.0181, 0.0010, 0.0022, 0.0045, 0.0061] }
+  ];
+  const DUO_SWEEP = [
+    { keep: 64, kl: 0.00000, agree: '24/24', gib: 8.16 },
+    { keep: 48, kl: 0.10115, agree: '17/24', gib: 6.16 },
+    { keep: 32, kl: 0.58229, agree: '14/24', gib: 4.17 },
+    { keep: 24, kl: 0.66605, agree: '12/24', gib: 3.18 },
+    { keep: 16, kl: 0.91740, agree: '12/24', gib: 2.18 },
+    { keep: 8,  kl: 1.36073, agree: '12/24', gib: 1.18 }
+  ];
+
+  // Act 1: Exact 24-layer Zipf data (steps/722/output.txt lines 315-338)
+  const ZIPF_24 = [
+    { l:'00', grp:'pre',  h:6.34, alpha:0.74, t32:60.2, b8:43.2, b32:87.0, b64:104.4, b256:123.1, j:'—' },
+    { l:'01', grp:'pre',  h:6.18, alpha:0.75, t32:62.6, b8:41.5, b32:84.3, b64:102.3, b256:118.6, j:'—' },
+    { l:'02', grp:'pre',  h:6.37, alpha:0.70, t32:59.4, b8:43.4, b32:91.0, b64:110.2, b256:126.9, j:'—' },
+    { l:'03', grp:'pre',  h:6.57, alpha:0.52, t32:51.7, b8:46.4, b32:94.1, b64:110.6, b256:125.4, j:'—' },
+    { l:'04', grp:'pre',  h:6.35, alpha:0.74, t32:61.0, b8:43.6, b32:86.7, b64:104.1, b256:122.0, j:'—' },
+    { l:'05', grp:'pre',  h:6.40, alpha:0.67, t32:58.1, b8:44.3, b32:89.6, b64:107.1, b256:121.0, j:'—' },
+    { l:'06', grp:'loop', h:6.33, alpha:0.73, t32:61.1, b8:41.2, b32:77.9, b64:92.3,  b256:109.6, j:'0.45' },
+    { l:'07', grp:'loop', h:5.95, alpha:0.95, t32:69.9, b8:36.7, b32:70.5, b64:85.0,  b256:105.6, j:'0.60' },
+    { l:'08', grp:'loop', h:5.65, alpha:1.22, t32:79.3, b8:33.4, b32:61.3, b64:76.2,  b256:101.2, j:'0.52' },
+    { l:'09', grp:'loop', h:5.69, alpha:1.09, t32:76.7, b8:34.2, b32:66.1, b64:82.7,  b256:106.0, j:'0.83' },
+    { l:'10', grp:'loop', h:5.97, alpha:1.01, t32:70.7, b8:37.6, b32:70.9, b64:85.3,  b256:105.8, j:'0.64' },
+    { l:'11', grp:'loop', h:5.69, alpha:1.15, t32:77.5, b8:33.3, b32:63.1, b64:78.3,  b256:102.2, j:'0.68' },
+    { l:'12', grp:'loop', h:6.23, alpha:0.81, t32:62.8, b8:40.5, b32:74.9, b64:89.4,  b256:109.8, j:'0.60' },
+    { l:'13', grp:'loop', h:5.87, alpha:1.06, t32:73.0, b8:36.6, b32:68.0, b64:82.2,  b256:104.0, j:'0.68' },
+    { l:'14', grp:'loop', h:5.90, alpha:1.05, t32:72.7, b8:35.2, b32:66.8, b64:81.0,  b256:102.8, j:'0.56' },
+    { l:'15', grp:'loop', h:5.80, alpha:1.14, t32:74.7, b8:32.8, b32:60.6, b64:73.5,  b256:95.3,  j:'0.60' },
+    { l:'16', grp:'loop', h:6.02, alpha:0.99, t32:71.3, b8:33.6, b32:60.9, b64:76.3,  b256:99.1,  j:'0.52' },
+    { l:'17', grp:'loop', h:5.87, alpha:1.07, t32:74.0, b8:21.7, b32:37.6, b64:46.1,  b256:60.5,  j:'0.25' },
+    { l:'18', grp:'coda', h:5.10, alpha:1.54, t32:86.9, b8:29.1, b32:53.8, b64:69.6,  b256:98.1,  j:'—' },
+    { l:'19', grp:'coda', h:5.62, alpha:1.10, t32:78.8, b8:34.4, b32:69.3, b64:89.8,  b256:116.0, j:'—' },
+    { l:'20', grp:'coda', h:5.61, alpha:1.11, t32:78.5, b8:33.9, b32:68.1, b64:86.8,  b256:111.0, j:'—' },
+    { l:'21', grp:'coda', h:5.81, alpha:1.07, t32:73.5, b8:38.0, b32:72.1, b64:88.4,  b256:111.7, j:'—' },
+    { l:'22', grp:'coda', h:5.72, alpha:1.14, t32:76.3, b8:35.8, b32:68.9, b64:84.0,  b256:104.9, j:'—' },
+    { l:'23', grp:'coda', h:6.11, alpha:0.89, t32:66.8, b8:40.0, b32:78.8, b64:95.1,  b256:115.6, j:'—' }
+  ];
+
+  // Act 1: DC Key Mean Energy across all 8 full slots
+  const DC_ENERGY = [
+    { name: 'blk.05(pre)', k: 32.64, v: 23.43 },
+    { name: 'blk.11(p0)',  k: 36.68, v: 18.03 },
+    { name: 'blk.17(p0)',  k: 26.99, v: 19.43 },
+    { name: 'blk.23(coda)',k: 23.83, v: 9.43  },
+    { name: 'blk.11(p1)',  k: 34.20, v: 17.99 },
+    { name: 'blk.17(p1)',  k: 29.38, v: 19.21 },
+    { name: 'blk.11(p2)',  k: 34.09, v: 18.23 },
+    { name: 'blk.17(p2)',  k: 29.45, v: 17.54 }
+  ];
+
+  // Act 3: bench-moe-opt full table
+  const MOE_OPT = [
+    { b: 1,   guO: 3.95,  guN: 4.02,   dnO: 3.43,  dnN: 3.48,  stO: 30.98,  stN: 31.02,  tpsO: 32.3,   tpsN: 32.2,   cs: 1.8 },
+    { b: 8,   guO: 19.66, guN: 24.15,  dnO: 14.53, dnN: 15.62, stO: 57.19,  stN: 60.54,  tpsO: 139.9,  tpsN: 132.1,  cs: 14.6 },
+    { b: 32,  guO: 45.29, guN: 49.20,  dnO: 33.27, dnN: 31.70, stO: 88.61,  stN: 95.67,  tpsO: 361.1,  tpsN: 334.5,  cs: 58.5 },
+    { b: 64,  guO: 60.14, guN: 71.81,  dnO: 43.15, dnN: 45.16, stO: 120.23, stN: 130.37, tpsO: 532.3,  tpsN: 490.9,  cs: 117.0 },
+    { b: 128, guO: 72.95, guN: 81.90,  dnO: 51.77, dnN: 52.22, stO: 153.76, stN: 166.72, tpsO: 832.4,  tpsN: 767.8,  cs: 234.0 },
+    { b: 256, guO: 88.48, guN: 105.07, dnO: 59.40, dnN: 65.14, stO: 221.60, stN: 233.00, tpsO: 1155.2, tpsN: 1098.7, cs: 468.0 }
+  ];
+
+  // Act 6: Real 2-Hop 50K Agent Data
+  const AGENT_HOPS = {
+    '1': {
+      title: 'Hop 1 · Read src/main.rs (~27.0K tokens)',
+      tokWith: 26922, tokWithout: 26984,
+      ttftWith: 557.8, ttftWithout: 13766.0,
+      speedup: '24.7×', effTps: '123.9K eff tok/s',
+      breakdown: [
+        { k: 'Open .ikv', ms: 5.0, c: '--violet' },
+        { k: 'Sys (38 tok)', ms: 137.9, c: '--amber' },
+        { k: 'Mount+Decode (26,922 tok)', ms: 212.3, c: '--cyan' },
+        { k: 'Question (109 tok)', ms: 202.7, c: '--emerald' }
+      ],
+      totalTokens: 27069,
+      files: [{ name: 'main.rs (26,922 tok)', start: 0, end: 26922, c: '--cyan' }],
+      facts: [
+        { id: 'f1', label: 'CLI Subcommand', dist: '~9.5K tok back', pos: 17500, val: '"persona-check" => persona::run_persona_check(...)' },
+        { id: 'f2', label: '--eris default path', dist: '~24.5K tok back', pos: 2500, val: 'adapter_final.ilora (.../eris/pass3_think/adapter_final.ilora)' },
+        { id: 'f3', label: '--ziz default path', dist: '~24.5K tok back', pos: 2550, val: 'adapter_best.ilora (.../zizzyinky/run1/adapter_best.ilora)' },
+        { id: 'f4', label: 'Next Hop File', dist: 'Inferred from mod', pos: 17600, val: 'src/persona.rs' }
+      ],
+      outWith:
+`1. \`persona-check\` → \`persona::run_persona_check(&o.model, &o.eris, &o.ziz, o.ctx)\`
+2. \`--eris\` default: \`/Users/eris/Documents/Programming/Projects/ErisLLM/inkling2/runs/eris/pass3_think/adapter_final.ilora\`
+   \`--ziz\` default: \`/Users/eris/Documents/Programming/Projects/ErisLLM/inkling2/runs/zizzyinky/run1/adapter_best.ilora\`
+3. \`src/persona.rs\`
+
+[ikv-read] Mounted 1 cartridge (26922 tok, 170.1 MiB on disk, 166.3 MiB read, 0 SWA skipped, seam=0)
+[ikv-read] TTFT: 557.8 ms (mount 212.3 ms = 123,911 eff tok/s) | decode 380 tok @ 44.4 tok/s`,
+      outWithout:
+`1. \`persona-check\` → \`persona::run_persona_check(&o.model, &o.eris, &o.ziz, o.ctx)\`
+2. \`--eris\` default: \`/Users/eris/Documents/Programming/Projects/ErisLLM/inkling2/runs/eris/pass3_think/adapter_final.ilora\`
+   \`--ziz\` default: \`/Users/eris/Documents/Programming/Projects/ErisLLM/inkling2/runs/zizzyinky/run1/adapter_best.ilora\`
+3. \`src/persona.rs\`
+
+[inkling] prompt 26984 tok @ 1960.2 tok/s (13,766 ms TTFT) | generated 384 tok @ 49.81 tok/s | KV 1056 MiB`
+    },
+    '2': {
+      title: 'Hop 2 · Stitched main.ikv + persona.ikv (~50.3K tokens)',
+      tokWith: 50252, tokWithout: 49746,
+      ttftWith: 798.8, ttftWithout: 30534.0,
+      speedup: '38.2×', effTps: '130.5K eff tok/s',
+      breakdown: [
+        { k: 'Open 2 .ikv', ms: 5.9, c: '--violet' },
+        { k: 'Sys (38 tok)', ms: 147.1, c: '--amber' },
+        { k: 'Mount+Decode (50,252 tok, 1 SWA skipped!)', ms: 379.0, c: '--cyan' },
+        { k: 'Question (143 tok)', ms: 266.8, c: '--emerald' }
+      ],
+      totalTokens: 50433,
+      files: [
+        { name: 'main.rs (26,922 tok · Full-only!)', start: 0, end: 26922, c: '--cyan' },
+        { name: 'persona.rs (23,330 tok · Full + SWA tail)', start: 26922, end: 50252, c: '--violet' }
+      ],
+      facts: [
+        { id: 'f1', label: 'main.rs · --eris/--ziz', dist: '~47.5K tok back', pos: 2800, val: 'adapter_final.ilora & adapter_best.ilora (full paths verbatim)' },
+        { id: 'f2', label: 'main.rs · subcommand', dist: '~33.0K tok back', pos: 17400, val: '"persona-check" => persona::run_persona_check(...)' },
+        { id: 'f3', label: 'persona.rs · StructEntry', dist: '~19.5K tok back', pos: 30900, val: '0 = attn (k/v/attn sconv), 1 = mlp (mlp sconv), 2 = global (attn_res, msg_query)' },
+        { id: 'f4', label: 'persona.rs · binary magic', dist: '~18.5K tok back', pos: 31900, val: 'b"ILOR0001" (8 bytes); data_start = 12 + hlen from raw[8..12]' }
+      ],
+      outWith:
+`1. \`persona-check\`; default \`--eris\` = \`adapter_final.ilora\` (/Users/eris/Documents/Programming/Projects/ErisLLM/inkling2/runs/eris/pass3_think/adapter_final.ilora); default \`--ziz\` = \`adapter_best.ilora\` (/Users/eris/Documents/Programming/Projects/ErisLLM/inkling2/runs/zizzyinky/run1/adapter_best.ilora).
+2. Magic: \`b"ILOR0001"\` (8 bytes); \`data_start = 12 + hlen\` where \`hlen\` is the little-endian u32 at bytes \`[8..12]\`.
+3. \`kind\`: \`0\` = attn (k/v/attn sconv), \`1\` = mlp (mlp sconv), \`2\` = global (attn_res, msg_query).
+
+[ikv-read] Mounted 2 cartridges (50252 tok, 321.4 MiB disk, 286.1 MiB read, 1 SWA skipped, seam=0)
+[ikv-read] TTFT: 798.8 ms (mount 379.0 ms = 130,543 eff tok/s) | decode 517 tok @ 40.8 tok/s`,
+      outWithout:
+`1. Subcommand: \`persona-check\`. Default \`--eris\` filename: \`adapter_final.ilora\` (full path /Users/eris/Documents/Programming/Projects/ErisLLM/inkling2/runs/eris/pass3_think/adapter_final.ilora). Default \`--ziz\` filename: \`adapter_best.ilora\` (full path /Users/eris/Documents/Programming/Projects/ErisLLM/inkling2/runs/zizzyinky/run1/adapter_best.ilora).
+2. Magic: \`b"ILOR0001"\` (8 bytes). \`data_start = 12 + hlen\`, where \`hlen\` is the u32 little-endian header length read from \`raw[8..12]\`.
+3. \`StructEntry.kind\`: 0 = attn (k/v/attn sconv), 1 = mlp (mlp sconv), 2 = global (attn_res, msg_query).
+
+[inkling] prompt 49746 tok @ 1629.2 tok/s (30,534 ms TTFT) | generated 513 tok @ 43.11 tok/s | KV 1812 MiB`
+    }
+  };
+
+  // ==================== RENDERERS ====================
+
+  // Act 0A: Batched decode curves
+  function renderAct0Batch() {
+    const el = document.getElementById('chartAct0Batch');
+    const W = 560, H = 260, pL = 52, pR = 22, pT = 26, pB = 40;
+    const pw = W - pL - pR, ph = H - pT - pB;
+    const bs = [1, 8, 16, 32, 64, 128, 256];
+    const xPos = b => pL + (Math.log2(b) / 8) * pw;
+    const yPos = v => pT + ph - (v / 1700) * ph;
+    const cInd = cssVar('--cyan'), cSh = cssVar('--amber');
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    [0, 400, 800, 1200, 1600].forEach(v => {
+      const y = yPos(v);
+      svg += `<line x1="${pL}" y1="${y}" x2="${W-pR}" y2="${y}" class="grid-stroke"/>`;
+      svg += `<text x="${pL-8}" y="${y+4}" text-anchor="end" font-size="10">${v}</text>`;
+    });
+    bs.forEach(b => {
+      const x = xPos(b);
+      svg += `<line x1="${x}" y1="${pT}" x2="${x}" y2="${H-pB}" class="grid-stroke"/>`;
+      svg += `<text x="${x}" y="${H-pB+16}" text-anchor="middle" font-size="10">B=${b}</text>`;
+    });
+    svg += `<line x1="${pL}" y1="${H-pB}" x2="${W-pR}" y2="${H-pB}" class="axis-stroke"/>`;
+    svg += `<text x="${pL}" y="14" font-size="10" fill="${cInd}">● Independent KV8 (realistic divergent)</text>`;
+    svg += `<text x="${pL+245}" y="14" font-size="10" fill="${cSh}">● Shared Greedy FP16 (8-expert trap)</text>`;
+
+    const poly = arr => arr.map(d => `${xPos(d.b).toFixed(1)},${yPos(d.tps).toFixed(1)}`).join(' ');
+    svg += `<polyline fill="none" stroke="${cSh}" stroke-width="2.5" stroke-dasharray="5,4" points="${poly(ACT0_BATCH_SHARED)}"/>`;
+    svg += `<polyline fill="none" stroke="${cInd}" stroke-width="3" points="${poly(ACT0_BATCH_IND)}"/>`;
+
+    ACT0_BATCH_SHARED.forEach(d => {
+      svg += `<circle cx="${xPos(d.b)}" cy="${yPos(d.tps)}" r="5" fill="${cSh}" ${tipAttr('Shared Greedy · B=' + d.b, [['Aggregate', d.tps + ' tok/s'], ['Step Latency', d.ms + ' ms'], ['Per Stream', d.per + ' tok/s'], ['Note', 'Collapses to 8/128 experts']])}/>`;
+    });
+    ACT0_BATCH_IND.forEach(d => {
+      svg += `<circle cx="${xPos(d.b)}" cy="${yPos(d.tps)}" r="5.5" fill="${cInd}" stroke="${cssVar('--bg-card')}" stroke-width="1.5" ${tipAttr('Independent KV8 · B=' + d.b, [['Aggregate', d.tps + ' tok/s'], ['Step Latency', d.ms + ' ms'], ['Per Stream', d.per + ' tok/s']])}/>`;
+    });
+    svg += `<text x="${xPos(256)-4}" y="${yPos(1077.4)-10}" text-anchor="end" font-size="10.5" fill="${cInd}" font-weight="700">1,077 tok/s</text>`;
+    svg += `<text x="${xPos(128)-6}" y="${yPos(1572.8)-10}" text-anchor="end" font-size="10.5" fill="${cSh}" font-weight="700">1,573 (trap)</text>`;
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+
+  // Act 0B: prof-batch breakdown
+  let activeProfB = '64';
+  function renderAct0Prof() {
+    const el = document.getElementById('chartAct0Prof');
+    const data = ACT0_PROF[activeProfB];
+    const W = 560, rowH = 24, pL = 132, pR = 112, pT = 18;
+    const H = pT + data.items.length * rowH + 20;
+    const maxPct = 55;
+    const bw = W - pL - pR;
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    data.items.forEach((it, idx) => {
+      const y = pT + idx * rowH;
+      const w = Math.max(3, (it.pct / maxPct) * bw);
+      const col = cssVar(it.c);
+      svg += `<text x="${pL-8}" y="${y+14}" text-anchor="end" font-size="10.5">${it.k}</text>`;
+      svg += `<rect x="${pL}" y="${y+3}" width="${bw}" height="15" rx="4" fill="${cssVar('--bg-subtle')}"/>`;
+      svg += `<rect x="${pL}" y="${y+3}" width="${w.toFixed(1)}" height="15" rx="4" fill="${col}" ${tipAttr(it.k + ' (B=' + activeProfB + ')', [['Time', it.ms + ' ms'], ['Share of step', it.pct + '%'], ['Total step', data.step + ' ms (' + data.tps + ' tok/s)']])}/>`;
+      svg += `<text x="${pL + w + 6}" y="${y+14}" font-size="10" class="svg-strong">${it.pct.toFixed(1)}% (${it.ms.toFixed(1)}ms)</text>`;
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+  document.querySelectorAll('#profToggle .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#profToggle .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeProfB = btn.dataset.b;
+      renderAct0Prof();
+    });
+  });
+
+  // DOODAD 1: 8x8 DuoAttention Heatmap
+  function heatColor(kl, collapsed) {
+    if (collapsed) return cssVar('--bg-subtle');
+    const t = Math.min(1, kl / 0.0271);
+    const isLight = htmlEl.getAttribute('data-theme') === 'light';
+    if (t < 0.35) {
+      const u = t / 0.35;
+      return isLight ? `rgb(${Math.round(220-120*u)},${Math.round(240-40*u)},${Math.round(252-10*u)})`
+                     : `rgb(${Math.round(22+18*u)},${Math.round(48+75*u)},${Math.round(78+95*u)})`;
+    } else if (t < 0.7) {
+      const u = (t - 0.35) / 0.35;
+      return isLight ? `rgb(${Math.round(100+140*u)},${Math.round(200-30*u)},${Math.round(242-180*u)})`
+                     : `rgb(${Math.round(40+190*u)},${Math.round(123+55*u)},${Math.round(173-130*u)})`;
+    } else {
+      const u = (t - 0.7) / 0.3;
+      return isLight ? `rgb(${Math.round(240-15*u)},${Math.round(170-120*u)},${Math.round(62-10*u)})`
+                     : `rgb(${Math.round(230+21*u)},${Math.round(178-80*u)},${Math.round(43+80*u)})`;
+    }
+  }
+
+  function renderDoodad1() {
+    const thresh = parseFloat(document.getElementById('duoThresh').value);
+    document.getElementById('duoThreshVal').textContent = thresh.toFixed(4);
+    const el = document.getElementById('doodad1Heatmap');
+    const W = 740, H = 310, pL = 112, pT = 30, cellW = 72, cellH = 30, gap = 4;
+    let active = 0, collapsed = 0;
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    for (let g = 0; g < 8; g++) {
+      const x = pL + g * (cellW + gap) + cellW / 2;
+      svg += `<text x="${x}" y="18" text-anchor="middle" font-size="11" class="svg-strong">head g=${g}</text>`;
+    }
+    DUO_SLOTS.forEach((row, r) => {
+      const y = pT + r * (cellH + gap);
+      svg += `<text x="${pL - 10}" y="${y + 19}" text-anchor="end" font-size="11" class="svg-strong">${row.name}</text>`;
+      row.heads.forEach((kl, g) => {
+        const isCol = kl < thresh;
+        if (isCol) collapsed++; else active++;
+        const x = pL + g * (cellW + gap);
+        const fill = heatColor(kl, isCol);
+        const stroke = isCol ? cssVar('--border') : (kl >= 0.020 ? cssVar('--rose') : 'transparent');
+        const txtCol = isCol ? cssVar('--text-faint') : (kl > 0.011 && htmlEl.getAttribute('data-theme') !== 'light' ? '#081018' : (kl > 0.017 ? '#ffffff' : cssVar('--text')));
+        const note = (row.name === 'blk.23(coda)' && g === 6) ? 'Rank #1 hottest head (72.4% far mass)' :
+                     (row.name === 'blk.17(p1)' && g === 4) ? 'Rank #64 quietest head (0.00006 KL)' :
+                     (isCol ? 'Collapsed to local-1024 at this cutoff' : 'Kept as full 256K retrieval head');
+        svg += `<g ${tipAttr(row.name + ' · KV head g=' + g, [['Single-Head KL', kl.toFixed(4)], ['Slot Total Mask KL', row.slotKL.toFixed(4) + ' (' + row.agree + ')'], ['Status', isCol ? 'Collapsed (1024)' : 'Full 256K'], ['Note', note]])}>`;
+        svg += `<rect x="${x}" y="${y}" width="${cellW}" height="${cellH}" rx="6" fill="${fill}" stroke="${stroke}" stroke-width="${kl >= 0.020 && !isCol ? 2 : 1}"/>`;
+        svg += `<text x="${x + cellW/2}" y="${y + 19}" text-anchor="middle" font-size="10.5" fill="${txtCol}" font-weight="${isCol ? '400' : '700'}">${kl.toFixed(4)}</text>`;
+        svg += `</g>`;
+      });
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+
+    const ramFull = (active / 64) * 8192 + (collapsed / 64) * 32;
+    const ramTot = (ramFull + 160) / 1024;
+    // Find nearest measured DuoAttention sweep point
+    let nearest = DUO_SWEEP[0];
+    let bestD = 999;
+    DUO_SWEEP.forEach(s => { const d = Math.abs(s.keep - active); if (d < bestD) { bestD = d; nearest = s; } });
+
+    document.getElementById('doodad1Stats').innerHTML = `
+      <div class="metric-mini"><div class="m-lbl">Full Retrieval Heads</div><div class="m-num" style="color:var(--cyan)">${active} / 64</div><div class="m-sub">${collapsed} collapsed to local-1024</div></div>
+      <div class="metric-mini"><div class="m-lbl">FP16 256K Footprint</div><div class="m-num">${ramTot.toFixed(2)} GiB</div><div class="m-sub">${(8.156 / ramTot).toFixed(2)}× vs 8.16 GiB dense</div></div>
+      <div class="metric-mini"><div class="m-lbl">Nearest Measured Sweep</div><div class="m-num" style="color:${nearest.kl > 0.2 ? 'var(--rose)' : 'var(--emerald)'}">KL ${nearest.kl.toFixed(3)}</div><div class="m-sub">Measured @ ${nearest.keep}/64 heads (${nearest.agree} argmax)</div></div>
+      <div class="metric-mini"><div class="m-lbl">Takeaway</div><div class="m-num" style="color:var(--amber)">Keep 64/64</div><div class="m-sub">Page compression beats head pruning 15×</div></div>
+    `;
+  }
+  document.getElementById('duoThresh').addEventListener('input', () => {
+    document.querySelectorAll('#duoPresets .seg-btn').forEach(b => b.classList.remove('active'));
+    renderDoodad1();
+  });
+  document.querySelectorAll('#duoPresets .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#duoPresets .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('duoThresh').value = btn.dataset.t;
+      renderDoodad1();
+    });
+  });
+
+  // Act 1 Quant Chart
+  function renderAct1Quant() {
+    const el = document.getElementById('chartAct1Quant');
+    const items = [
+      { n: 'K4V4 WHT-LM', kl: 0.0115, sz: 2112, c: '--emerald' },
+      { n: 'K4V4 unrot',  kl: 0.0164, sz: 2112, c: '--text-faint' },
+      { n: 'K3V3 WHT-LM', kl: 0.0238, sz: 1600, c: '--cyan' },
+      { n: 'K3V2+locF16', kl: 0.0320, sz: 1371, c: '--cyan' },
+      { n: 'K1+QJL1/V2',  kl: 0.1215, sz: 1120, c: '--amber' },
+      { n: 'K2V2 WHT-LM', kl: 0.1623, sz: 1088, c: '--rose' }
+    ];
+    const W = 540, H = 195, pL = 104, pR = 68, pT = 16;
+    const rowH = 26, bw = W - pL - pR;
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    items.forEach((d, i) => {
+      const y = pT + i * rowH;
+      const w = Math.max(4, (d.kl / 0.18) * bw);
+      const col = cssVar(d.c);
+      svg += `<text x="${pL-8}" y="${y+15}" text-anchor="end" font-size="10.5">${d.n}</text>`;
+      svg += `<rect x="${pL}" y="${y+4}" width="${bw}" height="15" rx="4" fill="${cssVar('--bg-subtle')}"/>`;
+      svg += `<rect x="${pL}" y="${y+4}" width="${w.toFixed(1)}" height="15" rx="4" fill="${col}" ${tipAttr(d.n, [['Mean KL (lower better)', d.kl.toFixed(5)], ['256K Full KV Size', d.sz + ' MiB'], ['Compression vs 8,192 MiB', (8192/d.sz).toFixed(2) + '×']])}/>`;
+      svg += `<text x="${pL + w + 6}" y="${y+15}" font-size="10" class="svg-strong">KL ${d.kl.toFixed(4)}</text>`;
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+
+  // Act 1 Sparse Retrieval vs Static Centroids
+  function renderAct1Sparse() {
+    const el = document.getElementById('chartAct1Sparse');
+    const pts = [
+      { n: 'WHT2-sk 5% + WHT-3b (WINNER)', mib: 111.7, kl: 0.03796, agr: '22/24', c: '--emerald', r: 7.5 },
+      { n: 'WHT2-sk 1% FP16', mib: 113.6, kl: 0.12409, agr: '20/24', c: '--cyan', r: 5 },
+      { n: 'WHT2-sk 5% FP16', mib: 440.0, kl: 0.04444, agr: '21/24', c: '--cyan', r: 5 },
+      { n: 'WHT2-sk 20% FP16', mib: 1664.0, kl: 0.02027, agr: '23/24', c: '--cyan', r: 5 },
+      { n: 'Quest 5% + WHT-3b', mib: 111.7, kl: 0.17844, agr: '19/24', c: '--amber', r: 5 },
+      { n: 'Quest 5% FP16', mib: 440.0, kl: 0.18290, agr: '19/24', c: '--amber', r: 5 },
+      { n: 'Quest 10% FP16', mib: 848.0, kl: 0.09824, agr: '21/24', c: '--amber', r: 5 },
+      { n: 'Static Centroid 8× (FP16)', mib: 1056.0, kl: 0.60335, agr: '15/24', c: '--rose', r: 6 },
+      { n: 'Static Centroid 32× (FP16)', mib: 288.0, kl: 1.06178, agr: '14/24', c: '--rose', r: 6 }
+    ];
+    const W = 540, H = 235, pL = 52, pR = 20, pT = 26, pB = 38;
+    const pw = W - pL - pR, ph = H - pT - pB;
+    const xPos = m => pL + ((Math.log2(m) - 6.5) / (11.2 - 6.5)) * pw;
+    const yPos = k => pT + ph - (Math.min(1.15, k) / 1.15) * ph;
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    [0, 0.2, 0.4, 0.6, 0.8, 1.0].forEach(k => {
+      const y = yPos(k);
+      svg += `<line x1="${pL}" y1="${y}" x2="${W-pR}" y2="${y}" class="grid-stroke"/>`;
+      svg += `<text x="${pL-7}" y="${y+4}" text-anchor="end" font-size="10">${k.toFixed(1)}</text>`;
+    });
+    [112, 256, 512, 1024, 2048].forEach(m => {
+      const x = xPos(m);
+      svg += `<line x1="${x}" y1="${pT}" x2="${x}" y2="${H-pB}" class="grid-stroke"/>`;
+      svg += `<text x="${x}" y="${H-pB+15}" text-anchor="middle" font-size="10">${m}M</text>`;
+    });
+    svg += `<text x="${W/2}" y="${H-6}" text-anchor="middle" font-size="10">Active 256K Full-KV RAM (log scale, lower-left = better)</text>`;
+    svg += `<text x="${pL}" y="14" font-size="10" fill="${cssVar('--emerald')}">● WHT2-sk+3b</text>`;
+    svg += `<text x="${pL+110}" y="14" font-size="10" fill="${cssVar('--cyan')}">● WHT2-sk FP16</text>`;
+    svg += `<text x="${pL+230}" y="14" font-size="10" fill="${cssVar('--amber')}">● Quest</text>`;
+    svg += `<text x="${pL+300}" y="14" font-size="10" fill="${cssVar('--rose')}">● Static Centroids (fail)</text>`;
+
+    pts.forEach(p => {
+      const cx = xPos(p.mib), cy = yPos(p.kl), col = cssVar(p.c);
+      svg += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${p.r}" fill="${col}" stroke="${cssVar('--bg-card')}" stroke-width="1.5" ${tipAttr(p.n, [['Active 256K RAM', p.mib + ' MiB (' + (8192/p.mib).toFixed(1) + '×)'], ['Mean E2E KL', p.kl.toFixed(5)], ['Argmax Agree', p.agr]])}/>`;
+    });
+    svg += `<text x="${xPos(111.7)+10}" y="${yPos(0.03796)-6}" font-size="10" fill="${cssVar('--emerald')}" font-weight="700">111.7 MiB · KL 0.038 (22/24)</text>`;
+    svg += `<text x="${xPos(288)+10}" y="${yPos(1.06178)+4}" font-size="10" fill="${cssVar('--rose')}">Centroids fail (KL 1.06)</text>`;
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+
+  // Act 1 DC Key Mean Energy Chart
+  function renderAct1DcCross() {
+    const el = document.getElementById('chartAct1DcCross');
+    const W = 760, H = 200, pL = 46, pR = 20, pT = 26, pB = 42;
+    const pw = W - pL - pR, ph = H - pT - pB;
+    const step = pw / DC_ENERGY.length;
+    const cK = cssVar('--cyan'), cV = cssVar('--violet');
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    [0, 10, 20, 30, 40].forEach(v => {
+      const y = pT + ph - (v / 42) * ph;
+      svg += `<line x1="${pL}" y1="${y}" x2="${W-pR}" y2="${y}" class="grid-stroke"/>`;
+      svg += `<text x="${pL-6}" y="${y+4}" text-anchor="end" font-size="10">${v}%</text>`;
+    });
+    svg += `<text x="${pL}" y="14" font-size="10" fill="${cK}">■ Key Constant DC Mean Energy % (cancels out of softmax!)</text>`;
+    svg += `<text x="${pL+380}" y="14" font-size="10" fill="${cV}">■ Value Mean Energy %</text>`;
+    DC_ENERGY.forEach((d, i) => {
+      const x0 = pL + i * step + step * 0.15;
+      const bw = step * 0.32;
+      const hK = (d.k / 42) * ph, hV = (d.v / 42) * ph;
+      svg += `<rect x="${x0}" y="${pT+ph-hK}" width="${bw}" height="${hK}" rx="4" fill="${cK}" ${tipAttr(d.name + ' · Key DC Energy', [['DC Mean Energy', d.k.toFixed(2) + '%'], ['Peak Single Head', 'Up to 49.6% (slot 0, g=0)'], ['Softmax Effect', 'Exact zero after sink shift']])}/>`;
+      svg += `<rect x="${x0+bw+4}" y="${pT+ph-hV}" width="${bw}" height="${hV}" rx="4" fill="${cV}" ${tipAttr(d.name + ' · Value Mean Energy', [['V Mean Energy', d.v.toFixed(2) + '%']])}/>`;
+      svg += `<text x="${x0+bw/2}" y="${pT+ph-hK-4}" text-anchor="middle" font-size="9.5" fill="${cK}" font-weight="700">${d.k.toFixed(1)}%</text>`;
+      svg += `<text x="${x0+bw}" y="${H-pB+16}" text-anchor="middle" font-size="9.5">${d.name}</text>`;
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+
+  // DOODAD 2: 24-Layer MoE Expert Zipf Explorer
+  let activeZipfMetric = 'alpha';
+  const ZIPF_META = {
+    alpha: { lbl: 'Zipf Exponent α (Higher = More Skewed)', max: 1.7, fmt: v => v.toFixed(2) },
+    h:     { lbl: 'Routing Entropy H in bits (Lower = More Skewed; max 7.0)', max: 7.0, fmt: v => v.toFixed(2) + 'b' },
+    t32:   { lbl: 'Top-32 Experts Traffic Share % (out of 128)', max: 100, fmt: v => v.toFixed(1) + '%' },
+    b8:    { lbl: 'Active Experts at B=8 (out of 128)', max: 128, fmt: v => v.toFixed(1) },
+    b32:   { lbl: 'Active Experts at B=32 (out of 128)', max: 128, fmt: v => v.toFixed(1) },
+    b64:   { lbl: 'Active Experts at B=64 (out of 128)', max: 128, fmt: v => v.toFixed(1) },
+    b256:  { lbl: 'Active Experts at B=256 (out of 128)', max: 128, fmt: v => v.toFixed(1) }
+  };
+  function renderDoodad2() {
+    const el = document.getElementById('doodad2Zipf');
+    const meta = ZIPF_META[activeZipfMetric];
+    const W = 780, H = 250, pL = 46, pR = 16, pT = 32, pB = 42;
+    const pw = W - pL - pR, ph = H - pT - pB;
+    const step = pw / 24;
+    const cPre = cssVar('--amber'), cLoop = cssVar('--cyan'), cCoda = cssVar('--violet'), cHi = cssVar('--emerald');
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    for (let i = 0; i <= 4; i++) {
+      const v = (meta.max / 4) * i;
+      const y = pT + ph - (v / meta.max) * ph;
+      svg += `<line x1="${pL}" y1="${y}" x2="${W-pR}" y2="${y}" class="grid-stroke"/>`;
+      svg += `<text x="${pL-6}" y="${y+4}" text-anchor="end" font-size="9.5">${meta.max <= 7 ? v.toFixed(1) : Math.round(v)}</text>`;
+    }
+    svg += `<text x="${pL}" y="14" font-size="10.5" class="svg-strong">${meta.lbl}</text>`;
+    svg += `<text x="${W-pR}" y="14" text-anchor="end" font-size="10"><tspan fill="${cPre}">■ Prelude (0..5)</tspan>  <tspan fill="${cLoop}">■ 3× Looped Core (6..17)</tspan>  <tspan fill="${cCoda}">■ Coda (18..23)</tspan></text>`;
+
+    ZIPF_24.forEach((d, idx) => {
+      const val = d[activeZipfMetric];
+      const h = (val / meta.max) * ph;
+      const x = pL + idx * step + 3;
+      const bw = step - 6;
+      const isStar = (d.l === '18' && (activeZipfMetric === 'alpha' || activeZipfMetric === 't32' || activeZipfMetric === 'h')) ||
+                     (d.l === '17' && activeZipfMetric.startsWith('b'));
+      const col = isStar ? cHi : (d.grp === 'pre' ? cPre : d.grp === 'loop' ? cLoop : cCoda);
+      svg += `<rect x="${x}" y="${pT+ph-h}" width="${bw}" height="${h}" rx="3.5" fill="${col}" ${tipAttr('Layer blk.' + d.l + ' (' + (d.grp === 'loop' ? '3× Looped' : d.grp) + ')', [['Zipf α', d.alpha.toFixed(2)], ['Entropy H', d.h.toFixed(2) + ' bits'], ['Top-32 Share', d.t32 + '%'], ['Active @ B=8 / 32', d.b8 + ' / ' + d.b32], ['Active @ B=64 / 256', d.b64 + ' / ' + d.b256], ['Pass 0–2 Jaccard', d.j]])}/>`;
+      svg += `<text x="${x + bw/2}" y="${H-pB+14}" text-anchor="middle" font-size="9">${d.l}</text>`;
+      if (isStar) {
+        svg += `<text x="${x + bw/2}" y="${pT+ph-h-6}" text-anchor="middle" font-size="9.5" fill="${cHi}" font-weight="700">${meta.fmt(val)}</text>`;
+      }
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+  document.querySelectorAll('#zipfMetric .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#zipfMetric .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeZipfMetric = btn.dataset.m;
+      renderDoodad2();
+    });
+  });
+
+  // Act 2A: Disk Offload Throughput
+  function renderAct2Offload() {
+    const el = document.getElementById('chartAct2Offload');
+    const pc = [
+      { b: 1, tps: 21.6, m: 'A' }, { b: 8, tps: 63.3, m: 'A' }, { b: 16, tps: 92.4, m: 'A' },
+      { b: 32, tps: 131.7, m: 'A' }, { b: 64, tps: 235.4, m: 'A' }, { b: 128, tps: 422.1, m: 'A' },
+      { b: 256, tps: 719.9, m: 'A' }, { b: 512, tps: 869.3, m: 'C' }, { b: 1024, tps: 989.5, m: 'C' },
+      { b: 2048, tps: 992.2, m: 'C' }, { b: 4096, tps: 978.7, m: 'C' }
+    ];
+    const all24 = [
+      { b: 1, tps: 11.9, m: 'A' }, { b: 8, tps: 30.2, m: 'A' }, { b: 16, tps: 45.1, m: 'A' },
+      { b: 32, tps: 50.1, m: 'A' }, { b: 64, tps: 97.2, m: 'A' }, { b: 128, tps: 188.0, m: 'A' },
+      { b: 256, tps: 362.9, m: 'A' }, { b: 512, tps: 548.9, m: 'C' }, { b: 1024, tps: 753.7, m: 'C' },
+      { b: 2048, tps: 848.8, m: 'C' }
+    ];
+    const W = 560, H = 250, pL = 50, pR = 20, pT = 28, pB = 40;
+    const pw = W - pL - pR, ph = H - pT - pB;
+    const xPos = b => pL + (Math.log2(b) / 12) * pw;
+    const yPos = v => pT + ph - (v / 1100) * ph;
+    const c1 = cssVar('--emerald'), c2 = cssVar('--amber');
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    // Shaded Mode C region
+    const xDiv = xPos(360);
+    svg += `<rect x="${xDiv}" y="${pT}" width="${W-pR-xDiv}" height="${ph}" fill="${cssVar('--emerald-soft')}" opacity="0.5"/>`;
+    svg += `<text x="${(xDiv+W-pR)/2}" y="${pT+14}" text-anchor="middle" font-size="9.5" fill="${c1}" font-weight="700">Mode C Macro-Batching</text>`;
+
+    [0, 250, 500, 750, 1000].forEach(v => {
+      const y = yPos(v);
+      svg += `<line x1="${pL}" y1="${y}" x2="${W-pR}" y2="${y}" class="grid-stroke"/>`;
+      svg += `<text x="${pL-7}" y="${y+4}" text-anchor="end" font-size="10">${v}</text>`;
+    });
+    [1, 8, 32, 128, 512, 2048, 4096].forEach(b => {
+      const x = xPos(b);
+      svg += `<text x="${x}" y="${H-pB+16}" text-anchor="middle" font-size="9.5">${b}</text>`;
+    });
+    svg += `<text x="${pL}" y="14" font-size="10" fill="${c1}">● prelude_coda (7.83 GiB offloaded)</text>`;
+    svg += `<text x="${pL+235}" y="14" font-size="10" fill="${c2}">● all24 (15.2 GiB offloaded)</text>`;
+
+    const poly = arr => arr.map(d => `${xPos(d.b).toFixed(1)},${yPos(d.tps).toFixed(1)}`).join(' ');
+    svg += `<polyline fill="none" stroke="${c1}" stroke-width="2.8" points="${poly(pc)}"/>`;
+    svg += `<polyline fill="none" stroke="${c2}" stroke-width="2.5" points="${poly(all24)}"/>`;
+    pc.forEach(d => {
+      svg += `<circle cx="${xPos(d.b)}" cy="${yPos(d.tps)}" r="4.5" fill="${c1}" ${tipAttr('prelude_coda · B=' + d.b + ' (Mode ' + d.m + ')', [['Throughput', d.tps + ' tok/s'], ['Offloaded', '12/24 layers (7.83 GiB)'], ['Exactness', 'Bit-exact 0.00e0']])}/>`;
+    });
+    all24.forEach(d => {
+      svg += `<circle cx="${xPos(d.b)}" cy="${yPos(d.tps)}" r="4.5" fill="${c2}" ${tipAttr('all24 · B=' + d.b + ' (Mode ' + d.m + ')', [['Throughput', d.tps + ' tok/s'], ['Offloaded', '24/24 layers (15.19 GiB)'], ['Exactness', 'Bit-exact 0.00e0']])}/>`;
+    });
+    svg += `<text x="${xPos(2048)}" y="${yPos(992.2)-9}" text-anchor="middle" font-size="10" fill="${c1}" font-weight="700">992.2</text>`;
+    svg += `<text x="${xPos(2048)}" y="${yPos(848.8)+16}" text-anchor="middle" font-size="10" fill="${c2}" font-weight="700">848.8</text>`;
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+
+  // Act 2B: Mode B Zipf SSD Savings
+  function renderAct2ZipfCache() {
+    const el = document.getElementById('chartAct2ZipfCache');
+    const rows = [
+      { b: 'B=1',  p32: 97.4, mb32: 208,  p59: 98.7, mb59: 102 },
+      { b: 'B=8',  p32: 80.9, mb32: 1534, p59: 88.6, mb59: 913 },
+      { b: 'B=32', p32: 50.9, mb32: 3941, p59: 68.3, mb59: 2543 },
+      { b: 'B=64', p32: 38.0, mb32: 4972, p59: 57.9, mb59: 3377 }
+    ];
+    const W = 540, H = 165, pL = 52, pR = 98, pT = 24, rowH = 32;
+    const bw = W - pL - pR;
+    const c32 = cssVar('--cyan'), c59 = cssVar('--violet');
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    svg += `<text x="${pL}" y="13" font-size="10" fill="${c32}">■ 32/128 experts pinned (1.96 GiB)</text>`;
+    svg += `<text x="${pL+230}" y="13" font-size="10" fill="${c59}">■ 59/128 pinned (3.61 GiB)</text>`;
+    rows.forEach((r, i) => {
+      const y = pT + i * rowH;
+      const w32 = (r.p32 / 100) * bw, w59 = (r.p59 / 100) * bw;
+      svg += `<text x="${pL-8}" y="${y+16}" text-anchor="end" font-size="10.5" class="svg-strong">${r.b}</text>`;
+      svg += `<rect x="${pL}" y="${y+2}" width="${w32}" height="10" rx="3" fill="${c32}" ${tipAttr('32/128 Hot Cache · ' + r.b, [['SSD Bytes Saved', r.p32 + '%'], ['SSD Read / Step', r.mb32 + ' MiB']])}/>`;
+      svg += `<rect x="${pL}" y="${y+14}" width="${w59}" height="10" rx="3" fill="${c59}" ${tipAttr('59/128 Hot Cache · ' + r.b, [['SSD Bytes Saved', r.p59 + '%'], ['SSD Read / Step', r.mb59 + ' MiB']])}/>`;
+      svg += `<text x="${pL + w59 + 6}" y="${y+17}" font-size="9.5" class="svg-strong">${r.p32}% / ${r.p59}%</text>`;
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+
+  // DOODAD 3: Layer-Pipelined Disk Offload Overlap Calculator
+  let offPolicy = 'prelude_coda';
+  function renderDoodad3() {
+    const bMacro = parseInt(document.getElementById('offBmacro').value, 10);
+    const bw = parseFloat(document.getElementById('offBw').value);
+    document.getElementById('offBmacroVal').textContent = bMacro.toLocaleString();
+    document.getElementById('offBwVal').textContent = bw.toFixed(1) + ' GiB/s';
+
+    // Calibrated directly to measured task-730.log GPU compute times:
+    // prelude_coda: B=512->525ms, 1024->1020ms, 2048->2050ms, 4096->4172ms (~1.01 ms/tok + 12ms fixed)
+    // all24: B=512->739ms, 1024->1340ms, 2048->2399ms (~1.16 ms/tok + 145ms fixed)
+    const ssdGiB = offPolicy === 'prelude_coda' ? 7.83 : 29.90;
+    const gpuMs = offPolicy === 'prelude_coda' ? (18 + 1.00 * bMacro) : (140 + 1.11 * bMacro);
+    const ssdMs = (ssdGiB / bw) * 1000;
+    // Layer-pipelined: first layer read (1/12 or 1/24) + max(gpu, remaining ssd)
+    const nLayers = offPolicy === 'prelude_coda' ? 12 : 48;
+    const coldLead = ssdMs / nLayers;
+    const overlapped = Math.min(gpuMs, ssdMs - coldLead);
+    const stallMs = Math.max(0, (ssdMs - coldLead) - gpuMs) + coldLead;
+    const wallMs = Math.max(gpuMs + coldLead, ssdMs + 14);
+    const overlapPct = ssdMs > 0 ? Math.min(100, (overlapped / ssdMs) * 100) : 100;
+    const aggTps = bMacro / (wallMs / 1000);
+    const stateMiB = (bMacro * 2304 * 2 * 7) / (1024 * 1024); // ~63 MiB at 2048
+
+    const el = document.getElementById('doodad3Offload');
+    const W = 760, H = 136, pL = 128, pR = 175, pT = 18;
+    const maxMs = Math.max(wallMs, gpuMs, ssdMs) * 1.12;
+    const barW = W - pL - pR;
+    const sc = ms => Math.max(3, (ms / maxMs) * barW);
+    const cGpu = cssVar('--cyan'), cSsd = cssVar('--amber'), cStall = cssVar('--rose'), cHid = cssVar('--emerald');
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    // GPU Compute row
+    svg += `<text x="${pL-10}" y="${pT+16}" text-anchor="end" font-size="11" class="svg-strong">GPU Compute</text>`;
+    svg += `<rect x="${pL}" y="${pT+3}" width="${barW}" height="20" rx="5" fill="${cssVar('--bg-subtle')}"/>`;
+    svg += `<rect x="${pL + sc(coldLead)}" y="${pT+3}" width="${sc(gpuMs)}" height="20" rx="5" fill="${cGpu}"/>`;
+    svg += `<text x="${pL + sc(coldLead) + sc(gpuMs) + 6}" y="${pT+17}" font-size="10.5" class="svg-strong">${gpuMs.toFixed(0)} ms</text>`;
+
+    // SSD Streaming row (split hidden vs exposed)
+    const y2 = pT + 36;
+    svg += `<text x="${pL-10}" y="${y2+16}" text-anchor="end" font-size="11" class="svg-strong">SSD Stream (${ssdGiB}G)</text>`;
+    svg += `<rect x="${pL}" y="${y2+3}" width="${barW}" height="20" rx="5" fill="${cssVar('--bg-subtle')}"/>`;
+    svg += `<rect x="${pL}" y="${y2+3}" width="${sc(overlapped)}" height="20" rx="5" fill="${cHid}"/>`;
+    if (stallMs > 1) {
+      svg += `<rect x="${pL + sc(overlapped)}" y="${y2+3}" width="${sc(stallMs)}" height="20" rx="5" fill="${cStall}"/>`;
+    }
+    svg += `<text x="${pL + sc(ssdMs) + 6}" y="${y2+17}" font-size="10.5" class="svg-strong">${ssdMs.toFixed(0)} ms (${overlapPct.toFixed(0)}% hidden)</text>`;
+
+    // Total Wall row
+    const y3 = pT + 72;
+    svg += `<text x="${pL-10}" y="${y3+16}" text-anchor="end" font-size="11" class="svg-strong">Total Wall Time</text>`;
+    svg += `<rect x="${pL}" y="${y3+3}" width="${barW}" height="20" rx="5" fill="${cssVar('--bg-subtle')}"/>`;
+    svg += `<rect x="${pL}" y="${y3+3}" width="${sc(wallMs)}" height="20" rx="5" fill="${stallMs > gpuMs * 0.25 ? cSsd : cssVar('--emerald')}"/>`;
+    svg += `<text x="${pL + sc(wallMs) + 6}" y="${y3+17}" font-size="10.5" class="svg-strong">${wallMs.toFixed(0)} ms → ${aggTps.toFixed(0)} tok/s</text>`;
+    svg += `</svg>`;
+    el.innerHTML = svg;
+
+    const bound = ssdMs > gpuMs ? 'SSD-Bound (raise B_macro)' : 'GPU-Bound (SSD hidden!)';
+    document.getElementById('doodad3Stats').innerHTML = `
+      <div class="metric-mini"><div class="m-lbl">Predicted Throughput</div><div class="m-num" style="color:var(--emerald)">${aggTps.toFixed(1)} tok/s</div><div class="m-sub">${(aggTps / bMacro).toFixed(2)} tok/s per stream</div></div>
+      <div class="metric-mini"><div class="m-lbl">SSD Overlap Hidden</div><div class="m-num" style="color:var(--cyan)">${overlapPct.toFixed(0)}%</div><div class="m-sub">${bound}</div></div>
+      <div class="metric-mini"><div class="m-lbl">Exposed I/O Stall</div><div class="m-num" style="color:${stallMs > 250 ? 'var(--rose)' : 'var(--emerald)'}">${stallMs.toFixed(0)} ms</div><div class="m-sub">Out of ${wallMs.toFixed(0)} ms macro-step</div></div>
+      <div class="metric-mini"><div class="m-lbl">Inter-Layer State RAM</div><div class="m-num">${stateMiB.toFixed(0)} MiB</div><div class="m-sub">Weight RAM freed: ${offPolicy === 'prelude_coda' ? '7.83 GiB' : '15.19 GiB'}</div></div>
+    `;
+  }
+  document.getElementById('offBmacro').addEventListener('input', renderDoodad3);
+  document.getElementById('offBw').addEventListener('input', () => {
+    document.querySelectorAll('#offPresets .seg-btn').forEach(b => b.classList.remove('active'));
+    renderDoodad3();
+  });
+  document.querySelectorAll('#offPolicy .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#offPolicy .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      offPolicy = btn.dataset.p;
+      renderDoodad3();
+    });
+  });
+  document.querySelectorAll('#offPresets .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#offPresets .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('offBw').value = btn.dataset.bw;
+      renderDoodad3();
+    });
+  });
+
+  // Act 3: bench-moe-opt grouped bar chart
+  let activeMoeMetric = 'tps';
+  function renderAct3Moe() {
+    const el = document.getElementById('chartAct3Moe');
+    const W = 760, H = 220, pL = 54, pR = 20, pT = 28, pB = 42;
+    const pw = W - pL - pR, ph = H - pT - pB;
+    const step = pw / MOE_OPT.length;
+    const isTps = activeMoeMetric === 'tps';
+    const maxV = isTps ? 1250 : (activeMoeMetric === 'gu' ? 115 : 72);
+    const cOld = cssVar('--emerald'), cNew = cssVar('--rose');
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    for (let i = 0; i <= 4; i++) {
+      const v = (maxV / 4) * i;
+      const y = pT + ph - (v / maxV) * ph;
+      svg += `<line x1="${pL}" y1="${y}" x2="${W-pR}" y2="${y}" class="grid-stroke"/>`;
+      svg += `<text x="${pL-7}" y="${y+4}" text-anchor="end" font-size="10">${Math.round(v)}</text>`;
+    }
+    svg += `<text x="${pL}" y="14" font-size="10.5" fill="${cOld}">■ route4 (Existing — Winner)</text>`;
+    svg += `<text x="${pL+205}" y="14" font-size="10.5" fill="${cNew}">■ route6 dyn4 (New — Slower)</text>`;
+
+    MOE_OPT.forEach((d, idx) => {
+      const vO = isTps ? d.tpsO : (activeMoeMetric === 'gu' ? d.guO : d.dnO);
+      const vN = isTps ? d.tpsN : (activeMoeMetric === 'gu' ? d.guN : d.dnN);
+      const x0 = pL + idx * step + step * 0.16;
+      const bw = step * 0.30;
+      const hO = (vO / maxV) * ph, hN = (vN / maxV) * ph;
+      const unit = isTps ? ' tok/s' : ' ms';
+      svg += `<rect x="${x0}" y="${pT+ph-hO}" width="${bw}" height="${hO}" rx="4" fill="${cOld}" ${tipAttr('route4 · B=' + d.b, [['Value', vO + unit], ['Full Step', d.stO + ' ms (' + d.tpsO + ' tok/s)']])}/>`;
+      svg += `<rect x="${x0+bw+5}" y="${pT+ph-hN}" width="${bw}" height="${hN}" rx="4" fill="${cNew}" ${tipAttr('route6 (dyn4) · B=' + d.b, [['Value', vN + unit], ['Full Step', d.stN + ' ms (' + d.tpsN + ' tok/s)'], ['FP16 CS Saved', '-' + d.cs + ' MiB']])}/>`;
+      svg += `<text x="${x0+bw/2}" y="${pT+ph-hO-4}" text-anchor="middle" font-size="9" fill="${cOld}" font-weight="700">${vO}</text>`;
+      svg += `<text x="${x0+bw+5+bw/2}" y="${pT+ph-hN-4}" text-anchor="middle" font-size="9" fill="${cNew}">${vN}</text>`;
+      svg += `<text x="${x0+bw+2}" y="${H-pB+16}" text-anchor="middle" font-size="10.5" class="svg-strong">B=${d.b}</text>`;
+      svg += `<text x="${x0+bw+2}" y="${H-pB+30}" text-anchor="middle" font-size="9" fill="${cssVar('--cyan')}">CS -${d.cs}M</text>`;
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+  document.querySelectorAll('#moeOptMetric .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#moeOptMetric .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeMoeMetric = btn.dataset.k;
+      renderAct3Moe();
+    });
+  });
+
+  // Act 4A: TokenDance diff sweep
+  function renderAct4Diff() {
+    const el = document.getElementById('chartAct4Diff');
+    const rows = [
+      { p: 0,  orc: 0.00812, c5: 0.00812, agr: '95/96', c64: '64.0×', c256: '255.8×' },
+      { p: 2,  orc: 0.00818, c5: 0.00830, agr: '96/96', c64: '28.3×', c256: '42.0×' },
+      { p: 5,  orc: 0.00639, c5: 0.00719, agr: '95/96', c64: '15.4×', c256: '18.6×' },
+      { p: 10, orc: 0.00593, c5: 0.00491, agr: '95/96', c64: '8.8×',  c256: '9.7×' },
+      { p: 15, orc: 0.00532, c5: 0.00476, agr: '96/96', c64: '6.1×',  c256: '6.5×' },
+      { p: 25, orc: 0.00388, c5: 0.00379, agr: '96/96', c64: '3.8×',  c256: '4.0×' }
+    ];
+    const W = 540, H = 225, pL = 52, pR = 20, pT = 26, pB = 44;
+    const pw = W - pL - pR, ph = H - pT - pB;
+    const xPos = i => pL + (i / (rows.length - 1)) * pw;
+    const yPos = v => pT + ph - (v / 0.010) * ph;
+    const cC5 = cssVar('--violet'), cOr = cssVar('--cyan');
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    [0, 0.002, 0.004, 0.006, 0.008, 0.010].forEach(v => {
+      const y = yPos(v);
+      svg += `<line x1="${pL}" y1="${y}" x2="${W-pR}" y2="${y}" class="grid-stroke"/>`;
+      svg += `<text x="${pL-7}" y="${y+4}" text-anchor="end" font-size="9.5">${v.toFixed(3)}</text>`;
+    });
+    svg += `<text x="${pL}" y="14" font-size="10" fill="${cC5}">● Check-Layer blk.5 (Real-Time)</text>`;
+    svg += `<text x="${pL+210}" y="14" font-size="10" fill="${cOr}">● Oracle Upper Bound</text>`;
+    svg += `<polyline fill="none" stroke="${cOr}" stroke-width="2" stroke-dasharray="4,3" points="${rows.map((d,i)=>`${xPos(i)},${yPos(d.orc)}`).join(' ')}"/>`;
+    svg += `<polyline fill="none" stroke="${cC5}" stroke-width="3" points="${rows.map((d,i)=>`${xPos(i)},${yPos(d.c5)}`).join(' ')}"/>`;
+
+    rows.forEach((d, i) => {
+      const x = xPos(i);
+      svg += `<circle cx="${x}" cy="${yPos(d.c5)}" r="5.5" fill="${cC5}" stroke="${cssVar('--bg-card')}" stroke-width="1.5" ${tipAttr('TokenDance blk.5 · ' + d.p + '% diff', [['Check5 Mean KL', d.c5.toFixed(5)], ['Oracle Mean KL', d.orc.toFixed(5)], ['Argmax (4 agents)', d.agr], ['256K Compr (N=64 / 256)', d.c64 + ' / ' + d.c256]])}/>`;
+      svg += `<text x="${x}" y="${H-pB+16}" text-anchor="middle" font-size="10" class="svg-strong">${d.p}%</text>`;
+      svg += `<text x="${x}" y="${H-pB+30}" text-anchor="middle" font-size="9" fill="${cssVar('--emerald')}">${d.c64}</text>`;
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+
+  // Act 4B: Fused GPU Master-Mirror Attention
+  function renderAct4Fused() {
+    const el = document.getElementById('chartAct4Fused');
+    const rows = [
+      { n: 'Dense Independent (100%)', ms: 30.80, mib: 8192, sp: '1.00×', c: '--rose' },
+      { n: 'Master + KVCOMM (0%)',     ms: 24.10, mib: 136,  sp: '1.28×', c: '--emerald' },
+      { n: 'Master + KVCOMM + 5%',     ms: 25.89, mib: 545,  sp: '1.19×', c: '--cyan' },
+      { n: 'Master + KVCOMM + 10%',    ms: 27.25, mib: 955,  sp: '1.13×', c: '--violet' }
+    ];
+    const W = 540, H = 205, pL = 165, pR = 116, pT = 18, rowH = 44;
+    const bw = W - pL - pR;
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    rows.forEach((r, i) => {
+      const y = pT + i * rowH;
+      const w = (r.ms / 34) * bw;
+      const col = cssVar(r.c);
+      svg += `<text x="${pL-8}" y="${y+14}" text-anchor="end" font-size="10.5" class="svg-strong">${r.n}</text>`;
+      svg += `<text x="${pL-8}" y="${y+28}" text-anchor="end" font-size="9.5">${r.mib.toLocaleString()} MiB (8 Full)</text>`;
+      svg += `<rect x="${pL}" y="${y+5}" width="${bw}" height="20" rx="5" fill="${cssVar('--bg-subtle')}"/>`;
+      svg += `<rect x="${pL}" y="${y+5}" width="${w}" height="20" rx="5" fill="${col}" ${tipAttr(r.n, [['8-Full-Slot Time', r.ms.toFixed(2) + ' ms'], ['Speedup vs Dense', r.sp], ['8-Full KV RAM', r.mib.toLocaleString() + ' MiB (' + (8192/r.mib).toFixed(1) + '× less)']])}/>`;
+      svg += `<text x="${pL + w + 8}" y="${y+19}" font-size="10.5" class="svg-strong">${r.ms.toFixed(1)} ms (${r.sp})</text>`;
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+
+  // Act 5A: Waterfall Dense FP16 -> v1 -> v2
+  function renderAct5Waterfall() {
+    const el = document.getElementById('chartAct5Waterfall');
+    const items = [
+      { n: 'Dense FP16', tot: 8360.7, mult: '1.0×', segs: [{ k:'Full FP16', v:8192, c:'--rose' }, { k:'SWA FP16', v:165, c:'--amber' }, { k:'CS', v:3.8, c:'--text-faint' }] },
+      { n: 'v1 WHT-KV4', tot: 308.1,  mult: '27.1×', segs: [{ k:'SWA FP16', v:165, c:'--amber' }, { k:'Quest Idx', v:66, c:'--violet' }, { k:'Hot Pages', v:75.3, c:'--cyan' }, { k:'CS', v:1.8, c:'--text-faint' }] },
+      { n: 'v1 WHT-KV2', tot: 172.1,  mult: '48.6×', segs: [{ k:'SWA KV8', v:82.5, c:'--amber' }, { k:'Quest Idx', v:66, c:'--violet' }, { k:'Hot Pages', v:21.8, c:'--cyan' }, { k:'CS', v:1.8, c:'--text-faint' }] },
+      { n: 'v2 WHT-K3V2', tot: 109.0, mult: '76.7×', segs: [{ k:'TierSWA', v:38.8, c:'--amber' }, { k:'WHT2 Idx', v:52.0, c:'--violet' }, { k:'Hot Pages', v:16.4, c:'--emerald' }, { k:'CS', v:1.8, c:'--text-faint' }] }
+    ];
+    // Use log-scaled visual width so 109 MiB vs 8,361 MiB is clearly legible AND segmented
+    const W = 550, H = 220, pL = 94, pR = 124, pT = 24, rowH = 46;
+    const bw = W - pL - pR;
+    const logW = v => (Math.log2(v) / Math.log2(8500)) * bw;
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    svg += `<text x="${pL}" y="14" font-size="9.5">Bar width log-scaled · Hover bars for exact MiB breakdown</text>`;
+    items.forEach((it, idx) => {
+      const y = pT + idx * rowH;
+      const totalW = logW(it.tot);
+      svg += `<text x="${pL-8}" y="${y+19}" text-anchor="end" font-size="10.5" class="svg-strong">${it.n}</text>`;
+      let cx = pL;
+      const tipRows = [['Total 256K RAM', it.tot.toFixed(1) + ' MiB (' + it.mult + ')']];
+      it.segs.forEach(s => tipRows.push([s.k, s.v.toFixed(1) + ' MiB']));
+      svg += `<g ${tipAttr(it.n + ' · Per 256K Instance', tipRows)}>`;
+      it.segs.forEach(s => {
+        const sw = Math.max(2, (s.v / it.tot) * totalW);
+        svg += `<rect x="${cx.toFixed(1)}" y="${y+5}" width="${sw.toFixed(1)}" height="22" rx="3" fill="${cssVar(s.c)}"/>`;
+        cx += sw;
+      });
+      svg += `</g>`;
+      svg += `<text x="${pL + totalW + 8}" y="${y+19}" font-size="10.5" class="svg-strong" fill="${idx === 3 ? cssVar('--emerald') : cssVar('--text')}">${it.tot.toFixed(0)} MiB (${it.mult})</text>`;
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+
+  // Act 5B: Real 48-layer KL Ablation
+  function renderAct5Ablation() {
+    const el = document.getElementById('chartAct5Ablation');
+    const rows = [
+      { n: 'Full v2 (WHT2-sk + DC + TierSWA i8)', kl: 0.01808, w: 0.14949, c: '--emerald' },
+      { n: 'v2 + TierSWA inner FP16',             kl: 0.02058, w: 0.16225, c: '--cyan' },
+      { n: 'Ablation: No DC Key Mean (noDC)',     kl: 0.03186, w: 0.36653, c: '--amber' },
+      { n: 'Ablation: Quest instead of WHT2-sk',  kl: 0.05033, w: 0.33660, c: '--rose' }
+    ];
+    const W = 550, H = 205, pL = 212, pR = 76, pT = 22, rowH = 42;
+    const bw = W - pL - pR;
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    svg += `<text x="${pL}" y="12" font-size="9.5">Mean 48-Layer Logit KL vs Exact Engine (Lower = Better · All 16/16 Argmax)</text>`;
+    rows.forEach((r, i) => {
+      const y = pT + i * rowH;
+      const w = (r.kl / 0.056) * bw;
+      const col = cssVar(r.c);
+      svg += `<text x="${pL-8}" y="${y+20}" text-anchor="end" font-size="10.5" class="${i===0?'svg-strong':''}">${r.n}</text>`;
+      svg += `<rect x="${pL}" y="${y+7}" width="${bw}" height="18" rx="5" fill="${cssVar('--bg-subtle')}"/>`;
+      svg += `<rect x="${pL}" y="${y+7}" width="${w}" height="18" rx="5" fill="${col}" ${tipAttr(r.n, [['Mean KL (16 steps)', r.kl.toFixed(5)], ['Worst Step KL', r.w.toFixed(5)], ['Argmax Match', '16/16 (100%)']])}/>`;
+      svg += `<text x="${pL + w + 7}" y="${y+20}" font-size="10.5" class="svg-strong">${r.kl.toFixed(4)}</text>`;
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+
+  // Act 5C: Live 256K Decode Throughput & Pool GiB
+  function renderAct5Live() {
+    const el = document.getElementById('chartAct5Live');
+    const rows = [
+      { lbl: 'B=1 indep',    tps: 22.4,  per: 22.36, pool: 0.23, fp16: 8.16,   ms: 44.73,  c: '--cyan' },
+      { lbl: 'B=16 indep',   tps: 157.4, per: 9.84,  pool: 1.85, fp16: 130.6,  ms: 101.65, c: '--cyan' },
+      { lbl: 'B=64 indep',   tps: 314.1, per: 4.91,  pool: 7.01, fp16: 522.2,  ms: 203.74, c: '--cyan' },
+      { lbl: 'B=96 indep',   tps: 371.4, per: 3.87,  pool: 10.45,fp16: 783.4,  ms: 258.51, c: '--emerald' },
+      { lbl: 'B=128 radix',  tps: 352.7, per: 2.76,  pool: 6.37, fp16: 1044.5, ms: 362.88, c: '--violet' }
+    ];
+    const W = 760, H = 225, pL = 52, pR = 52, pT = 28, pB = 46;
+    const pw = W - pL - pR, ph = H - pT - pB;
+    const step = pw / rows.length;
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    [0, 100, 200, 300, 400].forEach(v => {
+      const y = pT + ph - (v / 420) * ph;
+      svg += `<line x1="${pL}" y1="${y}" x2="${W-pR}" y2="${y}" class="grid-stroke"/>`;
+      svg += `<text x="${pL-7}" y="${y+4}" text-anchor="end" font-size="10">${v}</text>`;
+    });
+    svg += `<text x="${pL}" y="14" font-size="10.5" class="svg-strong">Aggregate Decode Throughput at ctx = 262,144 (tok/s) &amp; Live Pool RAM (GiB)</text>`;
+    rows.forEach((d, idx) => {
+      const x = pL + idx * step + step * 0.2;
+      const bw = step * 0.6;
+      const h = (d.tps / 420) * ph;
+      const col = cssVar(d.c);
+      svg += `<rect x="${x}" y="${pT+ph-h}" width="${bw}" height="${h}" rx="5" fill="${col}" ${tipAttr(d.lbl + ' @ 262,144 ctx', [['Aggregate Speed', d.tps + ' tok/s (' + d.per + '/seq)'], ['Step Time', d.ms + ' ms'], ['Live Pool RAM', d.pool + ' GiB'], ['Dense FP16 Equiv', d.fp16.toFixed(1) + ' GiB (' + (d.fp16/d.pool).toFixed(0) + '× smaller)']])}/>`;
+      svg += `<text x="${x + bw/2}" y="${pT+ph-h-6}" text-anchor="middle" font-size="10.5" class="svg-strong">${d.tps} tok/s</text>`;
+      svg += `<text x="${x + bw/2}" y="${H-pB+15}" text-anchor="middle" font-size="10.5" class="svg-strong">${d.lbl}</text>`;
+      svg += `<text x="${x + bw/2}" y="${H-pB+30}" text-anchor="middle" font-size="9.5" fill="${col}">${d.pool} GiB (vs ${d.fp16.toFixed(0)}G)</text>`;
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+
+  // DOODAD 4: 256K+ Multi-Instance Capacity & RAM Simulator
+  const CTX_STEPS = [16, 32, 64, 128, 256, 512, 1024]; // in K tokens
+  let simRamGiB = 48;
+  function renderDoodad4() {
+    const ctxK = CTX_STEPS[parseInt(document.getElementById('simCtx').value, 10)];
+    const nInst = parseInt(document.getElementById('simInst').value, 10);
+    const codec = document.getElementById('simCodec').value;
+    const share = document.getElementById('simShare').value;
+    document.getElementById('simCtxVal').textContent = ctxK >= 1024 ? '1M tok' : ctxK + 'K tok';
+    document.getElementById('simInstVal').textContent = nInst + ' inst';
+
+    const ctxScale = ctxK / 256.0;
+    const modelGiB = 16.3;
+    const osReserveGiB = 4.0;
+    const availForKvGiB = Math.max(1, simRamGiB - modelGiB - osReserveGiB);
+
+    // Per-instance MiB components at 256K, scaled accurately by context length:
+    // Fixed per-instance: SWA (capped at 1024) + CS (1.83 or 3.83)
+    // Context-proportional: Full KV or Sketch Index + Hot Active
+    let swaMiB, csMiB, idxMiB, hotMiB;
+    if (codec === 'v2') {
+      swaMiB = 38.8; csMiB = 1.83; idxMiB = 52.0 * ctxScale; hotMiB = 5.9 + 10.5 * Math.min(2, Math.sqrt(ctxScale));
+    } else if (codec === 'v1_kv2') {
+      swaMiB = 82.5; csMiB = 1.83; idxMiB = 66.0 * ctxScale; hotMiB = 4.8 + 17.0 * Math.min(2, Math.sqrt(ctxScale));
+    } else if (codec === 'v1_kv4') {
+      swaMiB = 165.0; csMiB = 1.83; idxMiB = 66.0 * ctxScale; hotMiB = 9.3 + 66.0 * Math.min(2, Math.sqrt(ctxScale));
+    } else if (codec === 'kv8') {
+      swaMiB = 82.5; csMiB = 3.83; idxMiB = 0; hotMiB = 4096.0 * ctxScale;
+    } else {
+      swaMiB = 165.0; csMiB = 3.83; idxMiB = 0; hotMiB = 8192.0 * ctxScale;
+    }
+
+    // Apply sharing factor to context-proportional Full/Index/Hot pools
+    let totSwaMiB = swaMiB * nInst;
+    let totCsMiB = csMiB * nInst;
+    let totIdxMiB, totHotMiB;
+    if (share === 'indep') {
+      totIdxMiB = idxMiB * nInst;
+      totHotMiB = hotMiB * nInst;
+    } else if (share === 'radix') {
+      // 75% shared prefix -> 1 master + 0.25 per extra
+      const eff = 1 + 0.25 * (nInst - 1);
+      totIdxMiB = idxMiB * eff;
+      totHotMiB = hotHotScale(hotMiB, eff);
+    } else if (share === 'td2') {
+      // 1 master + 2% diff per extra
+      const eff = 1 + 0.02 * (nInst - 1);
+      totIdxMiB = idxMiB * eff;
+      totHotMiB = hotMiB * (1 + 0.04 * (nInst - 1));
+    } else {
+      // 0% diff + KVCOMM tiny offset table (~0.5 MiB/inst)
+      totIdxMiB = idxMiB;
+      totHotMiB = hotMiB + 0.5 * (nInst - 1);
+    }
+    function hotHotScale(h, eff) { return h * eff; }
+
+    const kvGiB = (totSwaMiB + totCsMiB + totIdxMiB + totHotMiB) / 1024;
+    const totalGiB = modelGiB + kvGiB;
+    const denseFp16GiB = ((8192 * ctxScale + 165 + 3.83) * nInst) / 1024;
+    const compr = denseFp16GiB / Math.max(0.01, kvGiB);
+
+    // Marginal GiB per extra instance for max live capacity estimate
+    const perExtraMiB = swaMiB + csMiB +
+      (share === 'indep' ? (idxMiB + hotMiB) :
+       share === 'radix' ? 0.25 * (idxMiB + hotMiB) :
+       share === 'td2' ? (0.02 * idxMiB + 0.04 * hotMiB) : 0.5);
+    const fixedMasterMiB = share === 'indep' ? 0 : (idxMiB + hotMiB);
+    const maxInst = Math.max(0, Math.floor((availForKvGiB * 1024 - fixedMasterMiB) / Math.max(1, perExtraMiB)));
+    const swapRecMiB = swaMiB + csMiB + idxMiB;
+    const swapMs = (swapRecMiB / 1024) / 7.56 * 1000; // measured 7.56 GB/s F_NOCACHE swap
+
+    const el = document.getElementById('doodad4Ram');
+    const W = 760, H = 108, pL = 16, pR = 16, barY = 34, barH = 30;
+    const barW = W - pL - pR;
+    const scaleMax = Math.max(simRamGiB * 1.15, Math.min(totalGiB * 1.05, simRamGiB * 2.2));
+    const sx = g => Math.min(barW, Math.max(0, (g / scaleMax) * barW));
+    const limX = pL + sx(simRamGiB);
+    const fits = totalGiB <= (simRamGiB - osReserveGiB);
+
+    const segs = [
+      { k: 'Weights', v: modelGiB, c: '--text-faint' },
+      { k: 'SWA', v: totSwaMiB/1024, c: '--amber' },
+      { k: 'Index', v: totIdxMiB/1024, c: '--violet' },
+      { k: 'Hot/Full KV', v: totHotMiB/1024, c: '--cyan' },
+      { k: 'FP16 CS', v: totCsMiB/1024, c: '--emerald' }
+    ];
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    svg += `<text x="${pL}" y="18" font-size="10.5" class="svg-strong">Unified RAM Footprint: ${totalGiB.toFixed(2)} GiB / ${simRamGiB} GiB (${fits ? 'FITS LIVE' : 'EXCEEDS RAM — USE WAVE-SWAP'})</text>`;
+    svg += `<rect x="${pL}" y="${barY}" width="${barW}" height="${barH}" rx="7" fill="${cssVar('--bg-subtle')}"/>`;
+    let cx = pL;
+    segs.forEach(s => {
+      if (s.v <= 0.001) return;
+      const w = Math.min(pL + barW - cx, sx(s.v));
+      if (w > 1) {
+        svg += `<rect x="${cx.toFixed(1)}" y="${barY}" width="${w.toFixed(1)}" height="${barH}" rx="3" fill="${cssVar(s.c)}" ${tipAttr(s.k, [['Memory', s.v.toFixed(2) + ' GiB'], ['Share of Total', ((s.v/totalGiB)*100).toFixed(1) + '%']])}/>`;
+        cx += w;
+      }
+    });
+    // System RAM limit line
+    svg += `<line x1="${limX}" y1="${barY-8}" x2="${limX}" y2="${barY+barH+8}" stroke="${fits ? cssVar('--emerald') : cssVar('--rose')}" stroke-width="2.5" stroke-dasharray="4,3"/>`;
+    svg += `<text x="${Math.min(W-80, limX+5)}" y="${barY+barH+20}" font-size="10" fill="${fits ? cssVar('--emerald') : cssVar('--rose')}" font-weight="700">${simRamGiB} GiB RAM Limit</text>`;
+    // Legend
+    let lx = pL;
+    segs.forEach(s => {
+      svg += `<text x="${lx}" y="${H-6}" font-size="9.5" fill="${cssVar(s.c)}">■ ${s.k}: ${s.v.toFixed(2)}G</text>`;
+      lx += 132;
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+
+    document.getElementById('doodad4Stats').innerHTML = `
+      <div class="metric-mini"><div class="m-lbl">KV Pool RAM</div><div class="m-num" style="color:${fits ? 'var(--cyan)' : 'var(--rose)'}">${kvGiB.toFixed(2)} GiB</div><div class="m-sub">vs ${denseFp16GiB >= 1024 ? (denseFp16GiB/1024).toFixed(2) + ' TiB' : denseFp16GiB.toFixed(1) + ' GiB'} FP16</div></div>
+      <div class="metric-mini"><div class="m-lbl">Compression vs FP16</div><div class="m-num" style="color:var(--emerald)">${compr.toFixed(1)}×</div><div class="m-sub">${((kvGiB*1024)/nInst).toFixed(1)} MiB avg / session</div></div>
+      <div class="metric-mini"><div class="m-lbl">Max Live in ${simRamGiB}G</div><div class="m-num" style="color:var(--violet)">${maxInst.toLocaleString()}</div><div class="m-sub">Keeping 4 GiB macOS headroom</div></div>
+      <div class="metric-mini"><div class="m-lbl">Wave-Swap Out / Inst</div><div class="m-num">${swapMs.toFixed(1)} ms</div><div class="m-sub">${swapRecMiB.toFixed(1)} MiB @ 7.56 GB/s F_NOCACHE</div></div>
+    `;
+  }
+  ['simCtx', 'simInst', 'simCodec', 'simShare'].forEach(id => {
+    document.getElementById(id).addEventListener('input', renderDoodad4);
+    document.getElementById(id).addEventListener('change', renderDoodad4);
+  });
+  document.querySelectorAll('#simRamBtns .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#simRamBtns .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      simRamGiB = parseInt(btn.dataset.r, 10);
+      renderDoodad4();
+    });
+  });
+
+  // Act 6A: IKV1 Layout Diagram
+  function renderAct6Layout() {
+    const el = document.getElementById('chartAct6Layout');
+    const blocks = [
+      { n: 'Header', sz: '4 KiB', sub: 'IKV1 + Hash', w: 72, c: '--text-faint', ram: 'RAM (<1ms)' },
+      { n: 'tokens', sz: '4 B/tok', sub: 'Raw u32 IDs', w: 80, c: '--emerald', ram: 'Lossless text' },
+      { n: 'dc_mean', sz: '16 KiB', sub: '64-hd DC μ', w: 76, c: '--cyan', ram: 'RAM' },
+      { n: 'full_pages (WHT-K3V2)', sz: '5.25 KiB/tok', sub: '1.31 GiB @ 256K', w: 185, c: '--violet', ram: 'NVMe F_NOCACHE' },
+      { n: 'sketches', sz: '36 MiB@256K', sub: 'WHT-2bit', w: 94, c: '--cyan', ram: 'RAM Mount' },
+      { n: 'swa_tail', sz: '26.3 MiB', sub: 'Skip if not last!', w: 96, c: '--amber', ram: 'Last file only' },
+      { n: 'cs_tail', sz: '1.83 MiB', sub: '48×Conv', w: 66, c: '--rose', ram: 'Last file only' }
+    ];
+    const W = 710, H = 92;
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    let x = 10;
+    blocks.forEach(b => {
+      const col = cssVar(b.c);
+      svg += `<g ${tipAttr('Section: ' + b.n, [['Size', b.sz], ['Contents', b.sub], ['Mount Behavior', b.ram], ['Alignment', '4096-byte page aligned']])}>`;
+      svg += `<rect x="${x}" y="12" width="${b.w}" height="48" rx="6" fill="${col}" fill-opacity="0.18" stroke="${col}" stroke-width="1.5"/>`;
+      svg += `<text x="${x + b.w/2}" y="31" text-anchor="middle" font-size="10" fill="${col}" font-weight="700">${b.n}</text>`;
+      svg += `<text x="${x + b.w/2}" y="47" text-anchor="middle" font-size="9">${b.sz}</text>`;
+      svg += `<text x="${x + b.w/2}" y="76" text-anchor="middle" font-size="8.5">${b.ram}</text>`;
+      svg += `</g>`;
+      x += b.w + 5;
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+
+  // Act 6B: kv-pack-check 3-file results
+  function renderAct6Check() {
+    const el = document.getElementById('chartAct6Check');
+    const rows = [
+      { n: 'Ground Truth (Fresh Prefill)', ms: 2762.9, sp: '1.00×', kl: 0.0000, agr: '32/32', mb: 671.2, c: '--text-faint' },
+      { n: 'FP16 Standalone (seam=0)',     ms: 331.6,  sp: '8.33×', kl: 0.0291, agr: '31/32', mb: 673.9, c: '--cyan' },
+      { n: 'FP16 Prefix-Cond (seam=0)',    ms: 321.4,  sp: '8.60×', kl: 0.0149, agr: '31/32', mb: 673.9, c: '--emerald' },
+      { n: 'K3V2 Standalone (seam=0) ★',   ms: 367.3,  sp: '7.52×', kl: 0.0325, agr: '32/32', mb: 115.2, c: '--emerald' },
+      { n: 'K3V2 Prefix-Cond (seam=0)',    ms: 371.6,  sp: '7.43×', kl: 0.0304, agr: '31/32', mb: 115.2, c: '--cyan' },
+      { n: 'K3V2 Standalone (seam=16)',    ms: 704.0,  sp: '3.92×', kl: 0.0457, agr: '30/32', mb: 115.2, c: '--amber' }
+    ];
+    const W = 550, H = 228, pL = 185, pR = 114, pT = 20, rowH = 33;
+    const bw = W - pL - pR;
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    svg += `<text x="${pL}" y="12" font-size="9.5">TTFT Latency (ms, lower = faster · 5,914-tok 3-file prompt)</text>`;
+    rows.forEach((r, i) => {
+      const y = pT + i * rowH;
+      const w = Math.max(6, (r.ms / 2900) * bw);
+      const col = cssVar(r.c);
+      svg += `<text x="${pL-8}" y="${y+18}" text-anchor="end" font-size="10" class="${i===3||i===2?'svg-strong':''}">${r.n}</text>`;
+      svg += `<rect x="${pL}" y="${y+6}" width="${bw}" height="16" rx="4" fill="${cssVar('--bg-subtle')}"/>`;
+      svg += `<rect x="${pL}" y="${y+6}" width="${w}" height="16" rx="4" fill="${col}" ${tipAttr(r.n, [['TTFT', r.ms + ' ms (' + r.sp + ')'], ['Mean KL', r.kl.toFixed(4)], ['Argmax Agree', r.agr], ['Disk Size', r.mb + ' MiB']])}/>`;
+      svg += `<text x="${pL + w + 6}" y="${y+18}" font-size="9.5" class="svg-strong">${r.ms.toFixed(0)}ms (${r.sp})</text>`;
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    bindHover(el);
+  }
+
+  // DOODAD 5: Real 50K 2-Hop Codebase Agent Inspector
+  let activeHop = '2';
+  let activeAgentMode = 'with';
+  let activeFactId = null;
+  function renderDoodad5() {
+    const hop = AGENT_HOPS[activeHop];
+    if (!activeFactId || !hop.facts.some(f => f.id === activeFactId)) {
+      activeFactId = hop.facts[0].id;
+    }
+
+    // 1. Side-by-side TTFT bars
+    const barsEl = document.getElementById('doodad5Bars');
+    const W = 760, H = 128, pL = 165, pR = 215, pT = 16;
+    const bw = W - pL - pR;
+    const maxMs = hop.ttftWithout * 1.06;
+    const sc = ms => Math.max(4, (ms / maxMs) * bw);
+
+    let bSvg = `<svg viewBox="0 0 ${W} ${H}">`;
+    // WITHOUT bar
+    bSvg += `<text x="${pL-10}" y="${pT+19}" text-anchor="end" font-size="11" class="svg-strong">WITHOUT .ikv (Raw)</text>`;
+    bSvg += `<rect x="${pL}" y="${pT+5}" width="${bw}" height="22" rx="5" fill="${cssVar('--bg-subtle')}"/>`;
+    bSvg += `<rect x="${pL}" y="${pT+5}" width="${sc(hop.ttftWithout)}" height="22" rx="5" fill="${cssVar('--rose')}" ${tipAttr('WITHOUT .ikv · ' + hop.title, [['Prompt Tokens', hop.tokWithout.toLocaleString()], ['Raw Prefill TTFT', (hop.ttftWithout/1000).toFixed(2) + ' s (' + hop.ttftWithout.toFixed(0) + ' ms)'], ['Answers', '6/6 verbatim facts']])}/>`;
+    bSvg += `<text x="${pL + sc(hop.ttftWithout) + 8}" y="${pT+20}" font-size="11" fill="${cssVar('--rose')}" font-weight="700">${(hop.ttftWithout/1000).toFixed(2)} s</text>`;
+
+    // WITH .ikv stacked breakdown bar (amplified sub-strip below)
+    const y2 = pT + 38;
+    bSvg += `<text x="${pL-10}" y="${y2+19}" text-anchor="end" font-size="11" class="svg-strong" fill="${cssVar('--emerald')}">WITH .ikv (${hop.speedup})</text>`;
+    bSvg += `<rect x="${pL}" y="${y2+5}" width="${bw}" height="22" rx="5" fill="${cssVar('--bg-subtle')}"/>`;
+    bSvg += `<rect x="${pL}" y="${y2+5}" width="${sc(hop.ttftWith)}" height="22" rx="5" fill="${cssVar('--emerald')}" ${tipAttr('WITH .ikv · ' + hop.title, [['Mounted Tokens', hop.tokWith.toLocaleString()], ['Total TTFT', hop.ttftWith.toFixed(1) + ' ms (' + hop.speedup + ' faster!)'], ['Mount Speed', hop.effTps]])}/>`;
+    bSvg += `<text x="${pL + sc(hop.ttftWith) + 8}" y="${y2+20}" font-size="11" fill="${cssVar('--emerald')}" font-weight="700">${(hop.ttftWith/1000).toFixed(2)} s (${hop.ttftWith.toFixed(0)} ms · ${hop.effTps})</text>`;
+
+    // Zoomed breakdown of the WITH .ikv sub-second bar
+    const y3 = pT + 78;
+    bSvg += `<text x="${pL-10}" y="${y3+16}" text-anchor="end" font-size="10">Zoomed .ikv Breakdown</text>`;
+    let cx = pL;
+    hop.breakdown.forEach(seg => {
+      const sw = Math.max(8, (seg.ms / hop.ttftWith) * bw);
+      const col = cssVar(seg.c);
+      bSvg += `<rect x="${cx.toFixed(1)}" y="${y3+3}" width="${sw.toFixed(1)}" height="18" rx="3" fill="${col}" ${tipAttr(seg.k, [['Time', seg.ms.toFixed(1) + ' ms'], ['Share of TTFT', ((seg.ms/hop.ttftWith)*100).toFixed(1) + '%']])}/>`;
+      if (sw > 68) {
+        bSvg += `<text x="${(cx + sw/2).toFixed(1)}" y="${y3+15}" text-anchor="middle" font-size="9" fill="#071018" font-weight="700">${seg.ms.toFixed(0)}ms</text>`;
+      }
+      cx += sw + 2;
+    });
+    bSvg += `</svg>`;
+    barsEl.innerHTML = bSvg;
+    bindHover(barsEl);
+
+    // 2. Context Timeline showing 1,024-tok SWA window vs exact fact positions
+    const tlEl = document.getElementById('doodad5Timeline');
+    const tW = 760, tH = 88, tL = 16, tR = 16, tBw = tW - tL - tR;
+    const tx = pos => tL + (pos / hop.totalTokens) * tBw;
+    const swaStart = hop.totalTokens - 1024;
+    let tSvg = `<svg viewBox="0 0 ${tW} ${tH}">`;
+    tSvg += `<text x="${tL}" y="14" font-size="10.5" class="svg-strong">Context Distance Map (${hop.totalTokens.toLocaleString()} tok) — Click any fact below to highlight its exact spot outside the 1,024-tok window</text>`;
+    hop.files.forEach(f => {
+      const x0 = tx(f.start), x1 = tx(f.end);
+      const col = cssVar(f.c);
+      tSvg += `<rect x="${x0}" y="28" width="${Math.max(4, x1-x0)}" height="24" rx="4" fill="${col}" fill-opacity="0.20" stroke="${col}" stroke-width="1.2"/>`;
+      tSvg += `<text x="${(x0+x1)/2}" y="44" text-anchor="middle" font-size="10" fill="${col}" font-weight="700">${f.name}</text>`;
+    });
+    // Tiny 1,024 SWA window on far right
+    const swaX = tx(swaStart), swaW = Math.max(8, tL + tBw - swaX);
+    tSvg += `<rect x="${swaX}" y="26" width="${swaW}" height="28" rx="3" fill="${cssVar('--amber')}"/>`;
+    tSvg += `<text x="${tW - tR}" y="72" text-anchor="end" font-size="9.5" fill="${cssVar('--amber')}" font-weight="700">← 1,024-tok SWA window (only 2% of context!)</text>`;
+
+    hop.facts.forEach(f => {
+      const fx = tx(f.pos);
+      const isAct = f.id === activeFactId;
+      const col = isAct ? cssVar('--emerald') : cssVar('--cyan');
+      tSvg += `<line x1="${fx}" y1="22" x2="${fx}" y2="58" stroke="${col}" stroke-width="${isAct ? 3 : 1.8}"/>`;
+      tSvg += `<circle cx="${fx}" cy="24" r="${isAct ? 6 : 4.5}" fill="${col}" stroke="${cssVar('--bg-card')}" stroke-width="1.5"/>`;
+      if (isAct) {
+        tSvg += `<text x="${Math.max(tL + 60, Math.min(tW - 180, fx))}" y="74" text-anchor="middle" font-size="10" fill="${col}" font-weight="700">▲ ${f.label} (${f.dist})</text>`;
+      }
+    });
+    tSvg += `</svg>`;
+    tlEl.innerHTML = tSvg;
+
+    // 3. Clickable Fact Badges
+    const fEl = document.getElementById('doodad5Facts');
+    fEl.innerHTML = hop.facts.map(f => `
+      <button type="button" class="fact-btn ${f.id === activeFactId ? 'active' : ''}" data-fid="${f.id}">
+        <div class="f-top"><span>${f.label}</span><span>${f.dist}</span></div>
+        <div class="f-val">${f.val}</div>
+      </button>
+    `).join('');
+    fEl.querySelectorAll('.fact-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        activeFactId = btn.dataset.fid;
+        renderDoodad5();
+      });
+    });
+
+    // 4. Verbatim Output Box
+    document.getElementById('doodad5OutLabel').textContent =
+      (activeAgentMode === 'with' ? 'Actual Verbatim Output · WITH .ikv (WHT-K3V2, seam=0)' : 'Actual Verbatim Output · WITHOUT .ikv (Raw FP16 Prefill)') + ' — ' + hop.title;
+    document.getElementById('doodad5Output').textContent = activeAgentMode === 'with' ? hop.outWith : hop.outWithout;
+  }
+  document.querySelectorAll('#hopTabs .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#hopTabs .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeHop = btn.dataset.hop;
+      activeFactId = null;
+      renderDoodad5();
+    });
+  });
+  document.querySelectorAll('#modeTabs .seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#modeTabs .seg-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeAgentMode = btn.dataset.mode;
+      renderDoodad5();
+    });
+  });
+
+  // DOODAD 6: .ikv Repo Cartridge & TTFT Speedup Calculator
+  function renderDoodad6() {
+    const repoK = parseInt(document.getElementById('ikvToks').value, 10);
+    const hops = parseInt(document.getElementById('ikvHops').value, 10);
+    const fmt = document.getElementById('ikvFmt').value;
+    document.getElementById('ikvToksVal').textContent = repoK + 'K tok';
+    document.getElementById('ikvHopsVal').textContent = hops + (hops === 1 ? ' hop' : ' hops');
+
+    // Calibrated to exact measured points:
+    // Raw prefill rate drops quadratically: ~2,200 tok/s @ 2.4K, 1,960 tok/s @ 27K, 1,629 tok/s @ 50K
+    // Model: time_s(T) = T / 2250 + 0.00000375 * (T/1000)^2 * 1000? Let's fit exact 27K=13.77s, 50K=30.53s:
+    // t(K) = 0.415*K + 0.00385*K^2 -> at K=27: 11.21 + 2.81 = 14.0s; at K=50: 20.75 + 9.63 = 30.38s; at K=256: 106.2 + 252.3 = 358s!
+    const rawPerHopSec = 0.415 * repoK + 0.00385 * repoK * repoK;
+    // .ikv mount calibrated to exact Hop 1 (27K -> 0.56s) and Hop 2 (50K -> 0.80s):
+    // Fixed sys+q = 0.36s + linear mount/decode rate (~130K eff tok/s for K3V2, ~150K for prune, ~105K for KV4, ~85K for FP16)
+    const mountRateK = fmt === 'k3v2' ? 130 : (fmt === 'k3v2_prune' ? 165 : (fmt === 'kv4' ? 105 : 85));
+    const ikvPerHopSec = 0.38 + (repoK / mountRateK);
+
+    // Multi-hop cumulative wait (each hop adds context up to repoK, avg ~70% of repoK per hop when >1 hop, or full repoK on 1 hop)
+    let rawTotalSec = 0, ikvTotalSec = 0;
+    for (let h = 1; h <= hops; h++) {
+      const frac = hops === 1 ? 1.0 : (0.45 + 0.55 * (h / hops));
+      const k = repoK * frac;
+      rawTotalSec += 0.415 * k + 0.00385 * k * k;
+      ikvTotalSec += 0.38 + (k / mountRateK);
+    }
+    const speedup = rawTotalSec / Math.max(0.01, ikvTotalSec);
+
+    // Disk & RAM Mount sizes calibrated to kv-pack-check Part 3 (256K):
+    // FP16: 8.00 GiB full + 160 MiB SWA + 36 MiB sk = 8.20 GiB disk, 199.7 MiB RAM
+    // KV4:  2.06 GiB full + 41.3 MiB SWA + 36 MiB sk = 2.14 GiB disk, 79.2 MiB RAM
+    // K3V2: 1.31 GiB full + 26.3 MiB SWA + 36 MiB sk = 1.38 GiB disk, 64.2 MiB RAM
+    // K3V2+prune25%: 0.33 GiB full + 26.3 MiB SWA + 36 MiB sk = ~0.39 GiB disk, 64.2 MiB RAM
+    const s = repoK / 256.0;
+    const fullDiskMiB = (fmt === 'fp16' ? 8192 : fmt === 'kv4' ? 2112 : fmt === 'k3v2' ? 1344 : 336) * s;
+    const swaMiB = fmt === 'fp16' ? 160 : fmt === 'kv4' ? 41.3 : 26.3;
+    const skMiB = 36.0 * s;
+    const csMiB = 1.83;
+    const diskMiB = fullDiskMiB + swaMiB + skMiB + csMiB;
+    const ramMountMiB = swaMiB + skMiB + csMiB + 0.016; // Full pages stay on F_NOCACHE NVMe
+
+    const el = document.getElementById('doodad6Chart');
+    const W = 760, H = 104, pL = 162, pR = 175, pT = 16;
+    const bw = W - pL - pR;
+    const maxS = Math.max(rawTotalSec, ikvTotalSec) * 1.06;
+    const sc = sec => Math.max(5, (sec / maxS) * bw);
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}">`;
+    svg += `<text x="${pL-10}" y="${pT+20}" text-anchor="end" font-size="11" class="svg-strong">Raw Prefill (${hops}×)</text>`;
+    svg += `<rect x="${pL}" y="${pT+5}" width="${bw}" height="24" rx="5" fill="${cssVar('--bg-subtle')}"/>`;
+    svg += `<rect x="${pL}" y="${pT+5}" width="${sc(rawTotalSec)}" height="24" rx="5" fill="${cssVar('--rose')}"/>`;
+    svg += `<text x="${pL + sc(rawTotalSec) + 8}" y="${pT+21}" font-size="11" fill="${cssVar('--rose')}" font-weight="700">${rawTotalSec.toFixed(1)} s</text>`;
+
+    const y2 = pT + 42;
+    svg += `<text x="${pL-10}" y="${y2+20}" text-anchor="end" font-size="11" class="svg-strong" fill="${cssVar('--emerald')}">.ikv Instant Mount</text>`;
+    svg += `<rect x="${pL}" y="${y2+5}" width="${bw}" height="24" rx="5" fill="${cssVar('--bg-subtle')}"/>`;
+    svg += `<rect x="${pL}" y="${y2+5}" width="${sc(ikvTotalSec)}" height="24" rx="5" fill="${cssVar('--emerald')}"/>`;
+    svg += `<text x="${pL + sc(ikvTotalSec) + 8}" y="${y2+21}" font-size="11" fill="${cssVar('--emerald')}" font-weight="700">${ikvTotalSec.toFixed(2)} s (${speedup.toFixed(1)}× faster)</text>`;
+    svg += `</svg>`;
+    el.innerHTML = svg;
+
+    document.getElementById('doodad6Stats').innerHTML = `
+      <div class="metric-mini"><div class="m-lbl">TTFT Speedup (${hops} hops)</div><div class="m-num" style="color:var(--emerald)">${speedup.toFixed(1)}×</div><div class="m-sub">${rawTotalSec.toFixed(1)} s → ${ikvTotalSec.toFixed(2)} s total wait</div></div>
+      <div class="metric-mini"><div class="m-lbl">Single-Hop Peak TTFT</div><div class="m-num" style="color:var(--cyan)">${ikvPerHopSec.toFixed(2)} s</div><div class="m-sub">vs ${rawPerHopSec.toFixed(1)} s raw @ ${repoK}K tok</div></div>
+      <div class="metric-mini"><div class="m-lbl">Disk Cartridge Size</div><div class="m-num">${diskMiB >= 1024 ? (diskMiB/1024).toFixed(2) + ' GiB' : diskMiB.toFixed(0) + ' MiB'}</div><div class="m-sub">4 KiB aligned F_NOCACHE</div></div>
+      <div class="metric-mini"><div class="m-lbl">RAM Mount Footprint</div><div class="m-num" style="color:var(--violet)">${ramMountMiB.toFixed(1)} MiB</div><div class="m-sub">Full pages stream on demand</div></div>
+    `;
+  }
+  ['ikvToks', 'ikvHops', 'ikvFmt'].forEach(id => {
+    document.getElementById(id).addEventListener('input', renderDoodad6);
+    document.getElementById(id).addEventListener('change', renderDoodad6);
+  });
+
+  // Act 6C: Shadow KV-LSP Architecture Flow SVG
+  function renderAct6Shadow() {
+    const el = document.getElementById('chartAct6Shadow');
+    const W = 780, H = 164;
+    const cCy = cssVar('--cyan'), cEm = cssVar('--emerald'), cVi = cssVar('--violet'), cAm = cssVar('--amber');
+    const bg = cssVar('--bg-elev'), brd = cssVar('--border-hi');
+    let svg = `<svg viewBox="0 0 ${W} ${H}">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 10 5 L 0 9 z" fill="${brd}"/>
+        </marker>
+      </defs>
+      <!-- Top Row: Foreground Path -->
+      <rect x="10" y="14" width="165" height="58" rx="8" fill="${bg}" stroke="${cCy}" stroke-width="1.5"/>
+      <text x="92" y="34" text-anchor="middle" font-size="10.5" fill="${cCy}" font-weight="700">Any Coding Harness</text>
+      <text x="92" y="50" text-anchor="middle" font-size="9">Aider / Cline / OpenAI API</text>
+      <text x="92" y="63" text-anchor="middle" font-size="8.5">(Zero client changes!)</text>
+
+      <line x1="175" y1="43" x2="212" y2="43" stroke="${brd}" stroke-width="1.8" marker-end="url(#arr)"/>
+
+      <rect x="215" y="14" width="180" height="58" rx="8" fill="${bg}" stroke="${cVi}" stroke-width="1.5"/>
+      <text x="305" y="34" text-anchor="middle" font-size="10.5" fill="${cVi}" font-weight="700">Opaque OpenAI Proxy</text>
+      <text x="305" y="50" text-anchor="middle" font-size="9">&lt;1ms Gear/Rabin Matcher</text>
+      <text x="305" y="63" text-anchor="middle" font-size="8.5">Exact BLAKE3 verify (0 stale)</text>
+
+      <line x1="395" y1="43" x2="432" y2="43" stroke="${brd}" stroke-width="1.8" marker-end="url(#arr)"/>
+
+      <rect x="435" y="14" width="165" height="58" rx="8" fill="${bg}" stroke="${cEm}" stroke-width="1.5"/>
+      <text x="517" y="34" text-anchor="middle" font-size="10.5" fill="${cEm}" font-weight="700">Shared Metal Engine</text>
+      <text x="517" y="50" text-anchor="middle" font-size="9">1× 16.3 GiB Weights</text>
+      <text x="517" y="63" text-anchor="middle" font-size="8.5">Master Pool + MemGuard</text>
+
+      <line x1="600" y1="43" x2="637" y2="43" stroke="${brd}" stroke-width="1.8" marker-end="url(#arr)"/>
+
+      <rect x="640" y="14" width="130" height="58" rx="8" fill="${bg}" stroke="${cEm}" stroke-width="1.5"/>
+      <text x="705" y="36" text-anchor="middle" font-size="10.5" fill="${cEm}" font-weight="700">Instant Read</text>
+      <text x="705" y="52" text-anchor="middle" font-size="9.5" class="svg-strong">~40–80 ms TTFT</text>
+      <text x="705" y="64" text-anchor="middle" font-size="8.5">Normal SSE stream</text>
+
+      <!-- Bottom Row: Idle Packing Path -->
+      <rect x="10" y="96" width="165" height="56" rx="8" fill="${bg}" stroke="${cAm}" stroke-width="1.5"/>
+      <text x="92" y="116" text-anchor="middle" font-size="10.5" fill="${cAm}" font-weight="700">Workspace &amp; Compiles</text>
+      <text x="92" y="131" text-anchor="middle" font-size="9">macOS FSEvents (500ms)</text>
+      <text x="92" y="144" text-anchor="middle" font-size="8.5">+ /v1/ikv/idle_hint</text>
+
+      <line x1="175" y1="124" x2="212" y2="124" stroke="${brd}" stroke-width="1.8" marker-end="url(#arr)"/>
+
+      <rect x="215" y="96" width="180" height="56" rx="8" fill="${bg}" stroke="${cAm}" stroke-width="1.5"/>
+      <text x="305" y="116" text-anchor="middle" font-size="10.5" fill="${cAm}" font-weight="700">Preemptible Packer</text>
+      <text x="305" y="131" text-anchor="middle" font-size="9">256-tok micro-batches</text>
+      <text x="305" y="144" text-anchor="middle" font-size="8.5">Yields ≤130ms on foreground</text>
+
+      <line x1="395" y1="124" x2="432" y2="124" stroke="${brd}" stroke-width="1.8" marker-end="url(#arr)"/>
+
+      <rect x="435" y="96" width="335" height="56" rx="8" fill="${bg}" stroke="${cCy}" stroke-width="1.5"/>
+      <text x="602" y="116" text-anchor="middle" font-size="10.5" fill="${cCy}" font-weight="700">Content-Addressed .ikv-shadow Store (F_NOCACHE)</text>
+      <text x="602" y="131" text-anchor="middle" font-size="9">20 GiB LRU (~3.8M tokens ≈ 15 full 256K repos) · Atomic rename</text>
+      <text x="602" y="144" text-anchor="middle" font-size="8.5">Key = BLAKE3(model_id || adapter_id || bytes || framing_ver || codec)</text>
+
+      <!-- Vertical Links -->
+      <line x1="517" y1="96" x2="517" y2="74" stroke="${cCy}" stroke-width="1.6" stroke-dasharray="3,2" marker-end="url(#arr)"/>
+      <line x1="305" y1="72" x2="305" y2="94" stroke="${cAm}" stroke-width="1.6" stroke-dasharray="3,2" marker-end="url(#arr)"/>
+    </svg>`;
+    el.innerHTML = svg;
+  }
+
+  function renderAllDynamic() {
+    renderAct0Batch();
+    renderAct0Prof();
+    renderDoodad1();
+    renderAct1Quant();
+    renderAct1Sparse();
+    renderAct1DcCross();
+    renderDoodad2();
+    renderAct2Offload();
+    renderAct2ZipfCache();
+    renderDoodad3();
+    renderAct3Moe();
+    renderAct4Diff();
+    renderAct4Fused();
+    renderAct5Waterfall();
+    renderAct5Ablation();
+    renderAct5Live();
+    renderDoodad4();
+    renderAct6Layout();
+    renderAct6Check();
+    renderDoodad5();
+    renderDoodad6();
+    renderAct6Shadow();
+  }
+
+  renderAllDynamic();
+})();
+</script>
+</body>
+</html>

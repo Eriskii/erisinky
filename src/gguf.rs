@@ -65,7 +65,7 @@ impl Tensor {
 }
 
 pub struct Gguf {
-    _file: File,
+    pub(crate) file: File,
     pub map: *mut u8,
     pub map_len: usize,
     pub file_len: usize,
@@ -160,7 +160,7 @@ impl Gguf {
             assert!(t.file_off + t.nbytes <= file_len as u64, "tensor {} out of bounds", t.name);
             tensors.insert(t.name.clone(), t);
         }
-        Ok(Gguf { _file: file, map, map_len, file_len, kv, tensors })
+        Ok(Gguf { file, map, map_len, file_len, kv, tensors })
     }
 
     pub fn u(&self, k: &str) -> u64 {

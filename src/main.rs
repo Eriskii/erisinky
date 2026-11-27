@@ -1,19 +1,16 @@
-mod engine;
-mod gguf;
-mod metal;
-mod sampler;
-mod session;
-mod tokenizer;
-mod unicode_tables;
-
-use engine::Engine;
+use inkling::batch::{self, BatchEngine, SampleCfg};
+use inkling::engine::{self, Engine};
+use inkling::{kv256k, kv_probe, kv_share, metal, offload, persona, webui};
+use inkling::multistream::{MsAdapter, MsEngine, MsSamplerCfg, CH_AGENT_IN, CH_USER_IN};
+use inkling::sampler::Sampler;
+use inkling::session::{Renderer, Session};
+use inkling::tokenizer::Tokenizer;
 use objc2_metal::{MTLBuffer, MTLCommandBuffer};
-use sampler::Sampler;
-use session::{Renderer, Session};
+use std::collections::VecDeque;
 use std::io::{BufRead, Write};
-use tokenizer::Tokenizer;
 
 const DEFAULT_MODEL: &str = "~/.lmstudio/models/lmstudio-community/Inkling-2-Mini-GGUF/Inkling-2-Mini-Q4_K_M.gguf";
+const DEFAULT_ADAPTER: &str = "/Users/eris/Documents/Programming/Projects/inkling-multistream/checkpoints/native_ms_v5_selfplay_rl_best.imsa";
 
 const USAGE: &str = "inkling - a hand-fused Metal inference engine for Thinking Machines Inkling 2 Mini
 
@@ -22,12 +19,31 @@ usage: inkling <command> [options]
 commands:
   chat              interactive multi-turn chat (KV cache reused across turns)
   run -p TEXT       one prompt, streamed
+  multistream       run 7-channel Multi-Stream inference with an .imsa adapter (-a PATH -p TEXT)
+  serve             launch interactive 7-channel Multi-Stream WebUI (--adapter PATH --port 8765)
+  persona-serve     launch single-stream Dual-Persona (Eris <-> Ziz) Option B LoRA Chat WebUI
+  persona-check     verify Option B Dual-Persona prefill/decode parity and sample speed
+  batch             high-throughput parallel batch generation (-b N, -p TEXT or --prompts FILE)
   bench             greedy prefill + decode benchmark
+  bench-batch       parallel batched decode throughput sweep (-b N or -b 1,8,32,64,128,256)
   check --ref P     compare logits against a llama.cpp reference dump (tools/ref_logits)
+  check-batch --ref P  verify batched decode (independent & shared-prefix) against single-stream & ref
 
 options:
   -m, --model PATH  GGUF file (default: LM Studio's Inkling-2-Mini Q4_K_M)
-  -p, --prompt TEXT prompt text (run/bench)      -f FILE  read the prompt from a file
+  -a, --adapter PATH  .imsa Multi-Stream adapter file (multistream/serve)
+  --port N          HTTP port for WebUI (serve, default 8765)
+  --ticks N         max ticks for multistream CLI (default 96)
+  --max-kv N        max non-silent KV keys for multistream/serve (default 4096)
+  --silence-penalty F  logit penalty subtracted from <|silence|> (default 0.0)
+  --interrupt TEXT  schedule a mid-stream user_input interrupt (multistream CLI)
+  --interrupt-at T  tick to inject --interrupt (default 14)
+  --peer-kv STR     auto-peer key=val list (e.g. 'code_18=831', multistream CLI)
+  -p, --prompt TEXT prompt text (run/bench/batch/multistream)  -f FILE  read the prompt from a file
+  --prompts FILE    file with one prompt per line (batch / bench-batch independent mode)
+  -b, --batch N     batch size or comma-separated sweep (e.g. -b 256 or -b 1,16,64,128,256)
+  --shared          share prompt prefix KV cache across streams (batch/bench-batch/prof-batch)
+  --independent     give each stream its own independent KV cache (bench-batch/prof-batch)
   -n N              max new tokens (default 2048, bench 128)
   -c, --ctx N       context length (default 16384)
   --effort E        reasoning effort: none|minimal|low|medium|high|xhigh|<0..0.99> (default high)
@@ -39,11 +55,17 @@ options:
   --kv-disk         keep only half of the (exact) K/V cache in memory while generating; the older half lives in a
                     temporary file and is read back for every token (slower generation)
   --kv8             8-bit K/V cache: half the cache memory, NOT exact (the default fp16 cache is)
+  --max-mem GB      hard cap on batch working GPU memory in GiB (default: safe auto <= 10 GiB)
   --raw             do not apply the chat template; print special tokens";
 
 struct Opts {
     model: String, prompt: String, n: usize, ctx: usize, raw: bool, effort: String, reference: String, quiet: bool, stop: usize,
     system: String, temp: f32, top_p: f32, top_k: usize, seed: u64, hide_thinking: bool, n_set: bool,
+    batch: String, prompts_file: String, shared: bool, independent: bool, max_mem: Option<f64>,
+    adapter: String, adapter_set: bool, port: u16, ticks: usize, max_kv: usize, silence_penalty: f32,
+    interrupt: String, interrupt_at: u32, peer_kv: String, temp_set: bool,
+    eris: String, ziz: String, webui: String, contexts: String, policy: String, subtest: String,
+    kv_bits: u32, topk_pages: usize,
 }
 
 fn parse() -> (String, Opts) {
@@ -52,13 +74,42 @@ fn parse() -> (String, Opts) {
     let home = std::env::var("HOME").unwrap_or_default();
     let mut o = Opts { model: DEFAULT_MODEL.replace('~', &home), prompt: "Write a haiku about the ocean.".into(), n: 2048, ctx: 16384,
                        raw: false, effort: "high".into(), reference: String::new(), quiet: false, stop: 1, system: String::new(),
-                       temp: 1.0, top_p: 0.95, top_k: 64, seed: 0, hide_thinking: false, n_set: false };
+                       temp: 1.0, top_p: 0.95, top_k: 64, seed: 0, hide_thinking: false, n_set: false,
+                       batch: "64".into(), prompts_file: String::new(), shared: false, independent: false, max_mem: None,
+                       adapter: DEFAULT_ADAPTER.into(), adapter_set: false, port: 8765, ticks: 96, max_kv: 4096, silence_penalty: 0.0,
+                       interrupt: String::new(), interrupt_at: 14, peer_kv: String::new(), temp_set: false,
+                       eris: "/Users/eris/Documents/Programming/Projects/ErisLLM/inkling2/runs/eris/pass3_think/adapter_final.ilora".into(),
+                       ziz: "/Users/eris/Documents/Programming/Projects/ErisLLM/inkling2/runs/zizzyinky/run1/adapter_best.ilora".into(),
+                       webui: "/Users/eris/Documents/Programming/Projects/ErisLLM/inkling2/webui/index.html".into(),
+                       contexts: "/Users/eris/Documents/Programming/Projects/ErisLLM/data/dataset/contexts.json".into(),
+                       policy: "sweep".into(), subtest: "all".into(), kv_bits: 4, topk_pages: 64 };
     while let Some(a) = args.next() {
         let mut v = || args.next().unwrap_or_else(|| { eprintln!("missing value for {a}"); std::process::exit(2) });
         match a.as_str() {
             "-m" | "--model" => o.model = v(),
+            "-a" | "--adapter" => { o.adapter = v(); o.adapter_set = true; }
+            "--eris" => o.eris = v(),
+            "--ziz" => o.ziz = v(),
+            "--webui" => o.webui = v(),
+            "--contexts" => o.contexts = v(),
+            "--policy" => o.policy = v(),
+            "--subtest" => o.subtest = v(),
+            "--kv-bits" => o.kv_bits = v().parse().expect("kv-bits"),
+            "--topk-pages" => o.topk_pages = v().parse().expect("topk-pages"),
+            "--port" => o.port = v().parse().expect("port"),
+            "--ticks" => o.ticks = v().parse().expect("ticks"),
+            "--max-kv" => o.max_kv = v().parse().expect("max-kv"),
+            "--silence-penalty" => o.silence_penalty = v().parse().expect("silence-penalty"),
+            "--interrupt" => o.interrupt = v(),
+            "--interrupt-at" => o.interrupt_at = v().parse().expect("interrupt-at"),
+            "--peer-kv" => o.peer_kv = v(),
             "-p" | "--prompt" => o.prompt = v(),
             "-f" | "--file" => o.prompt = std::fs::read_to_string(v()).expect("read prompt file"),
+            "--prompts" => o.prompts_file = v(),
+            "-b" | "--batch" => o.batch = v(),
+            "--shared" => o.shared = true,
+            "--independent" => o.independent = true,
+            "--max-mem" => o.max_mem = Some(v().parse().expect("max-mem GiB")),
             "-n" => { o.n = v().parse().unwrap(); o.n_set = true; }
             "-c" | "--ctx" => o.ctx = v().parse::<usize>().unwrap().div_ceil(64) * 64,
             "--raw" => o.raw = true,
@@ -66,11 +117,11 @@ fn parse() -> (String, Opts) {
             "--kv-disk" => engine::KV_DISK.store(true, std::sync::atomic::Ordering::Relaxed),
             "--effort" => o.effort = v(),
             "--system" => o.system = v(),
-            "--temp" => o.temp = v().parse().unwrap(),
+            "--temp" => { o.temp = v().parse().unwrap(); o.temp_set = true; }
             "--top-p" => o.top_p = v().parse().unwrap(),
             "--top-k" => o.top_k = v().parse().unwrap(),
             "--seed" => o.seed = v().parse().unwrap(),
-            "--greedy" => o.temp = 0.0,
+            "--greedy" => { o.temp = 0.0; o.temp_set = true; }
             "--hide-thinking" => o.hide_thinking = true,
             "--ref" => o.reference = v(),
             "-q" => o.quiet = true,
@@ -611,6 +662,7 @@ fn main() {
                 println!("{n}: {tf:5.1} TFLOPs   relative RMS error {rel:.2e}   max error / output RMS {mx:.2e}");
             }
         }
+        "kbatch" => { let eng = Engine::load(&o.model, 4096); eng.kbench_batch_probe(); }
         "bw" => { let eng = Engine::load(&o.model, 4096); eng.bw_weights(); }
         "kbench" => {
             let eng = Engine::load(&o.model, 4096);
@@ -627,7 +679,422 @@ fn main() {
         }
         "run" => run(&o),
         "chat" => chat(&o),
+        "multistream" => run_multistream(&o),
+        "serve" => run_serve(&o),
+        "persona-serve" => persona::run_persona_serve(&o.model, &o.eris, &o.ziz, &o.webui, &o.contexts, o.port, o.ctx),
+        "persona-check" => persona::run_persona_check(&o.model, &o.eris, &o.ziz, o.ctx),
         "bench" => bench(&o),
+        "batch" => run_batch(&o),
+        "bench-batch" => bench_batch(&o),
+        "check-batch" => check_batch(&o),
+        "prof-batch" => prof_batch(&o),
+        "bench-offload" => {
+            let eng = Engine::load(&o.model, o.ctx);
+            offload::run_bench_offload(&eng, &o.policy, o.max_mem);
+        }
+        "kv-probe" => {
+            let eng = Engine::load(&o.model, o.ctx);
+            let tk = Tokenizer::load(&eng.g);
+            let d = if o.n_set { o.n } else { 24 };
+            kv_probe::run_kv_probe(&eng, &tk, &o.prompt, d, &o.subtest);
+        }
+        "bench-moe-opt" => {
+            let eng = Engine::load(&o.model, o.ctx);
+            let batches: Vec<usize> = o.batch.split(',').map(|s| s.trim().parse().expect("batch")).collect();
+            kv256k::run_bench_moe_opt(&eng, &batches, o.max_mem);
+        }
+        "bench-256k" => {
+            let ctx = o.ctx.max(262144);
+            let eng = Engine::load(&o.model, ctx);
+            let tk = Tokenizer::load(&eng.g);
+            let n_inst: usize = o.batch.split(',').next().unwrap().parse().unwrap_or(64);
+            kv256k::run_bench_256k(&eng, &tk, n_inst, ctx, o.topk_pages, o.kv_bits, o.max_mem);
+        }
+        "kv-share-probe" => {
+            let eng = Engine::load(&o.model, o.ctx);
+            let tk = Tokenizer::load(&eng.g);
+            let steps = if o.n_set { o.n } else { 32 };
+            kv_share::run_kv_share_probe(&eng, &tk, steps);
+        }
         _ => println!("{USAGE}"),
     }
+}
+
+fn run_batch(o: &Opts) {
+    let eng = Engine::load(&o.model, o.ctx);
+    let tk = Tokenizer::load(&eng.g);
+    let b: usize = o.batch.split(',').next().unwrap().parse().expect("batch size");
+    let n = if o.n_set { o.n } else { 256 };
+    let max_mem = BatchEngine::safe_mem_limit(&eng, o.max_mem);
+    let sample = if o.temp <= 0.0 { None } else { Some(SampleCfg { temp: o.temp, top_k: o.top_k, top_p: o.top_p, seed: o.seed }) };
+    let need_slice = sample.is_some();
+    let (results, stats) = if !o.prompts_file.is_empty() {
+        let lines: Vec<String> = std::fs::read_to_string(&o.prompts_file).expect("read prompts file")
+            .lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+        let prompts: Vec<Vec<u32>> = lines.iter().map(|p| {
+            let text = if o.raw { p.clone() } else { first_turn(o, p) };
+            tk.encode(&text, true)
+        }).collect();
+        let max_p = prompts.iter().map(|p| p.len()).max().unwrap_or(64);
+        let init_full = b.min(prompts.len()) * (max_p + n).div_ceil(batch::KV_BLK);
+        let init_swa = b.min(prompts.len()) * (max_p + n).div_ceil(batch::KV_BLK).min(batch::SWA_RING_BLKS);
+        let mut be = BatchEngine::try_new(&eng, b.min(prompts.len()), o.ctx, init_swa, init_full, need_slice, max_mem)
+            .unwrap_or_else(|e| { eprintln!("error: {e}"); std::process::exit(1) });
+        be.generate_independent(&prompts, n, sample, tk.eos, true)
+    } else {
+        let text = if o.raw { o.prompt.clone() } else { first_turn(o, &o.prompt) };
+        let toks = tk.encode(&text, true);
+        let init_full = b * n.div_ceil(batch::KV_BLK);
+        let init_swa = b * n.div_ceil(batch::KV_BLK).min(batch::SWA_RING_BLKS);
+        let mut be = BatchEngine::try_new(&eng, b, o.ctx, init_swa, init_full, need_slice, max_mem)
+            .unwrap_or_else(|e| { eprintln!("error: {e}"); std::process::exit(1) });
+        be.generate_shared(&toks, b, n, sample, tk.eos, true)
+    };
+    if !o.quiet {
+        let mut out = std::io::stdout();
+        for (i, seq) in results.iter().enumerate() {
+            println!("=== [{i}] ({} tokens) ===", seq.len());
+            let mut r = Renderer::new(!o.hide_thinking, o.raw);
+            for &t in seq { if t == tk.eos { break; } r.push(&tk, t, &mut out); }
+            r.end(&mut out);
+            println!();
+        }
+    }
+    eprintln!(
+        "[inkling batch] {} seqs (peak B={}) | prefill {} tok @ {:.1} tok/s ({:.1} ms) | decode {} tok in {} steps @ {:.1} tok/s ({:.2} tok/s/seq, {:.2} ms/step) | mem KV {:.0} MiB + CS {:.0} MiB + Act {:.0} MiB (cap {:.1} GiB)",
+        results.len(), stats.peak_batch,
+        stats.prompt_tokens, stats.prompt_tokens as f64 / stats.prompt_time.as_secs_f64().max(1e-9), stats.prompt_time.as_secs_f64() * 1e3,
+        stats.gen_tokens, stats.decode_steps,
+        stats.gen_tokens as f64 / stats.gen_time.as_secs_f64().max(1e-9),
+        (stats.gen_tokens as f64 / stats.gen_time.as_secs_f64().max(1e-9)) / stats.peak_batch.max(1) as f64,
+        stats.gen_time.as_secs_f64() * 1e3 / stats.decode_steps.max(1) as f64,
+        stats.kv_bytes as f64 / 1048576.0, stats.cs_bytes as f64 / 1048576.0, stats.act_bytes as f64 / 1048576.0,
+        max_mem as f64 / (1u64 << 30) as f64,
+    );
+}
+
+fn bench_batch(o: &Opts) {
+    let eng = Engine::load(&o.model, o.ctx);
+    let tk = Tokenizer::load(&eng.g);
+    let n = if o.n_set { o.n } else { 64 };
+    let max_mem = BatchEngine::safe_mem_limit(&eng, o.max_mem);
+    let text = if o.raw { o.prompt.clone() } else { first_turn(o, &o.prompt) };
+    let base_toks = tk.encode(&text, true);
+    let sizes: Vec<usize> = o.batch.split(',').map(|s| s.trim().parse().expect("batch size")).collect();
+    let sample = if o.temp <= 0.0 || !std::env::args().any(|a| a == "--temp") { None } else { Some(SampleCfg { temp: o.temp, top_k: o.top_k, top_p: o.top_p, seed: o.seed }) };
+    let need_slice = sample.is_some();
+    let shared_mode = !o.independent;
+    println!("bench-batch: prompt {} tok, gen {} tok/stream, mode={}, kv={}, sampling={}, mem_cap={:.2} GiB",
+             base_toks.len(), n,
+             if shared_mode { "shared-prefix" } else { "independent" },
+             if eng.kv8 { "kv8" } else { "fp16" },
+             if sample.is_some() { format!("temp={}", o.temp) } else { "greedy".into() },
+             max_mem as f64 / (1u64 << 30) as f64);
+    for &b in &sizes {
+        let p_len = base_toks.len();
+        let (init_swa, init_full) = if shared_mode {
+            let pf = n.div_ceil(batch::KV_BLK);
+            (b * pf.min(batch::SWA_RING_BLKS), b * pf)
+        } else {
+            let pf = (p_len + n).div_ceil(batch::KV_BLK);
+            (b * pf.min(batch::SWA_RING_BLKS), b * pf)
+        };
+        let mut be = match BatchEngine::try_new(&eng, b, o.ctx, init_swa, init_full, need_slice, max_mem) {
+            Ok(be) => be,
+            Err(err) => { println!("  B={b:4} | SKIPPED ({err})"); continue; }
+        };
+        let (_, stats) = if shared_mode {
+            be.generate_shared(&base_toks, b, n, sample, tk.eos, false)
+        } else {
+            // Create B slightly distinct prompts of the same length so routing diverges realistically
+            let prompts: Vec<Vec<u32>> = (0..b).map(|i| {
+                let mut v = base_toks.clone();
+                let vl = v.len();
+                if vl > 4 { v[vl - 2] = 1000 + ((i * 7919) % 50000) as u32; }
+                v
+            }).collect();
+            be.generate_independent(&prompts, n, sample, tk.eos, false)
+        };
+        let agg = stats.gen_tokens as f64 / stats.gen_time.as_secs_f64();
+        let per = agg / b as f64;
+        let ms_step = stats.gen_time.as_secs_f64() * 1e3 / stats.decode_steps.max(1) as f64;
+        let pf_tps = stats.prompt_tokens as f64 / stats.prompt_time.as_secs_f64().max(1e-9);
+        println!("  B={b:4} | prefill {:6} tok @ {:7.1} tok/s ({:6.1} ms) | decode {:6} tok: {:7.1} ms ({:6.2} ms/step) -> {:7.1} tok/s ({:5.2}/seq) | KV {:5.0} + CS {:4.0} + Act {:3.0} MiB",
+                 stats.prompt_tokens, pf_tps, stats.prompt_time.as_secs_f64() * 1e3,
+                 stats.gen_tokens, stats.gen_time.as_secs_f64() * 1e3, ms_step, agg, per,
+                 stats.kv_bytes as f64 / 1048576.0, stats.cs_bytes as f64 / 1048576.0, stats.act_bytes as f64 / 1048576.0);
+        drop(be);
+    }
+}
+
+fn check_batch(o: &Opts) {
+    let eng = Engine::load(&o.model, o.ctx);
+    let max_mem = BatchEngine::safe_mem_limit(&eng, o.max_mem);
+    let toks: Vec<u32> = std::fs::read_to_string(format!("{}.tokens", o.reference)).unwrap().lines().map(|l| l.trim().parse().unwrap()).collect();
+    let raw = std::fs::read(format!("{}.logits", o.reference)).unwrap();
+    let nv = eng.n_vocab;
+    let reflog: Vec<f32> = raw.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+    let first_ref = toks.len() - reflog.len() / nv;
+    let am = |v: &[f32]| v.iter().enumerate().fold((0, f32::MIN), |b, (i, &x)| if x > b.1 { (i, x) } else { b }).0;
+    let lse = |v: &[f32]| { let m = v.iter().cloned().fold(f32::MIN, f32::max); m + v.iter().map(|x| (x - m).exp()).sum::<f32>().ln() };
+
+    let b_test: usize = o.batch.split(',').next().unwrap().parse().unwrap_or(8).max(4);
+    if toks.len() <= 200 {
+        println!("=== check-batch Test 1: Independent paged decode (B={b_test}, checking stream 0 & stream {}) ===", b_test - 1);
+        let init_p = b_test * toks.len().div_ceil(batch::KV_BLK) + 16;
+        let mut be = BatchEngine::try_new(&eng, b_test, o.ctx, init_p.min(b_test * batch::SWA_RING_BLKS + 16), init_p, true, max_mem).unwrap();
+        let mut seqs = be.make_seq_slots(b_test, false);
+        let (mut agree0, mut agree_last, mut worst_kl, mut worst_pos) = (0usize, 0usize, 0f32, 0usize);
+        for pos in 0..toks.len() {
+            for (b, s) in seqs.iter_mut().enumerate() {
+                s.next_tok = if b == 0 || b == b_test - 1 { toks[pos] } else { 1000 + ((b * 997 + pos * 31) % 30000) as u32 };
+            }
+            let lgs = be.step_logits(&mut seqs);
+            if pos < first_ref { continue; }
+            let r = &reflog[(pos - first_ref) * nv..(pos - first_ref + 1) * nv];
+            let l2 = lse(r);
+            for &(si, tag) in &[(0usize, 0usize), (b_test - 1, 1usize)] {
+                let lg: Vec<f32> = lgs[si].iter().map(|&x| softcap(x, eng.softcap)).collect();
+                let (a1, a2) = (am(&lg), am(r));
+                let l1 = lse(&lg);
+                let kl: f32 = r.iter().zip(&lg).map(|(b, a)| { let pb = (b - l2).exp(); pb * ((b - l2) - (a - l1)) }).sum();
+                if tag == 0 && a1 == a2 { agree0 += 1; }
+                if tag == 1 && a1 == a2 { agree_last += 1; }
+                if kl > worst_kl { worst_kl = kl; worst_pos = pos; }
+            }
+        }
+        let nchk = toks.len() - first_ref;
+        println!("  stream 0 argmax {agree0}/{nchk}, stream {} argmax {agree_last}/{nchk}, worst KL {worst_kl:.6} (at pos {worst_pos})", b_test - 1);
+    } else {
+        println!("=== check-batch Test 1: skipped step-by-step ({} toks > 200); covered by Tests 2 & 3 ===", toks.len());
+    }
+
+    let p_len_t2 = if first_ref > 0 { first_ref } else { toks.len() / 2 };
+    println!("=== check-batch Test 2: Shared-prefix cascade attention (prefix={p_len_t2}, B={b_test}) ===");
+    {
+        let rem = toks.len() - p_len_t2;
+        let init_p = b_test * rem.div_ceil(batch::KV_BLK) + 16;
+        let mut be = BatchEngine::try_new(&eng, b_test, o.ctx, init_p.min(b_test * batch::SWA_RING_BLKS + 16), init_p, true, max_mem).unwrap();
+        be.set_prefix(&toks[..p_len_t2]);
+        let mut seqs = be.make_seq_slots(b_test, true);
+        let (mut agree, mut worst_kl, mut worst_pos, mut nchk) = (0usize, 0f32, 0usize, 0usize);
+        for pos in p_len_t2..toks.len() {
+            for (b, s) in seqs.iter_mut().enumerate() {
+                s.next_tok = if b == 0 { toks[pos] } else { 2000 + ((b * 733 + pos * 17) % 30000) as u32 };
+            }
+            let lgs = be.step_logits(&mut seqs);
+            if pos < first_ref { continue; }
+            let r = &reflog[(pos - first_ref) * nv..(pos - first_ref + 1) * nv];
+            let lg: Vec<f32> = lgs[0].iter().map(|&x| softcap(x, eng.softcap)).collect();
+            let (a1, a2) = (am(&lg), am(r));
+            let (l1, l2) = (lse(&lg), lse(r));
+            let kl: f32 = r.iter().zip(&lg).map(|(b, a)| { let pb = (b - l2).exp(); pb * ((b - l2) - (a - l1)) }).sum();
+            if a1 == a2 { agree += 1; }
+            if kl > worst_kl { worst_kl = kl; worst_pos = pos; }
+            nchk += 1;
+        }
+        println!("  shared-prefix cascade argmax {agree}/{nchk}, worst KL {worst_kl:.6} (at pos {worst_pos})");
+    }
+
+    println!("=== check-batch Test 3: Packed multi-prompt prefill + decode (B={b_test}) ===");
+    {
+        let p_len = (toks.len() - 1).max(1);
+        let pf = toks.len().div_ceil(batch::KV_BLK);
+        let mut be = BatchEngine::try_new(&eng, b_test, o.ctx, b_test * pf.min(batch::SWA_RING_BLKS) + 32, b_test * pf + 32, true, max_mem).unwrap();
+        let mut alt_prompts: Vec<Vec<u32>> = Vec::with_capacity(b_test);
+        for b in 0..b_test {
+            if b == 0 || b == b_test - 1 { alt_prompts.push(toks[..p_len].to_vec()); }
+            else { alt_prompts.push((0..((p_len / 2).min(256) + b * 3).max(5)).map(|i| 1500 + ((b * 101 + i * 29) % 20000) as u32).collect()); }
+        }
+        let items: Vec<(usize, &[u32], usize)> = alt_prompts.iter().enumerate().map(|(i, v)| (i, v.as_slice(), 4)).collect();
+        let (mut seqs, _, _) = be.prefill_packed(&items, None);
+        let r_pre = &reflog[(p_len - 1 - first_ref) * nv..(p_len - first_ref) * nv];
+        let ref_tok_pre = am(r_pre) as u32;
+        println!("  packed prefill next_tok: stream 0 = {} (ref {}), stream {} = {} (ref {})",
+                 seqs[0].next_tok, ref_tok_pre, b_test - 1, seqs[b_test - 1].next_tok, ref_tok_pre);
+        seqs[0].next_tok = toks[p_len];
+        seqs[b_test - 1].next_tok = toks[p_len];
+        let lgs = be.step_logits(&mut seqs);
+        let r = &reflog[(p_len - first_ref) * nv..(p_len + 1 - first_ref) * nv];
+        let l2 = lse(r);
+        for &si in &[0usize, b_test - 1] {
+            let lg: Vec<f32> = lgs[si].iter().map(|&x| softcap(x, eng.softcap)).collect();
+            let (a1, a2) = (am(&lg), am(r));
+            let l1 = lse(&lg);
+            let kl: f32 = r.iter().zip(&lg).map(|(b, a)| { let pb = (b - l2).exp(); pb * ((b - l2) - (a - l1)) }).sum();
+            println!("  after packed prefill, decode step stream {si}: argmax {a1} ref {a2} {} KL {kl:.6}", if a1 == a2 { "OK" } else { "XX" });
+        }
+    }
+
+    println!("=== check-batch Test 4: Fused register-argmax & GPU top-k/top-p sampler (B={b_test}) ===");
+    {
+        let p_len = p_len_t2.min(toks.len() - 1);
+        let mut be = BatchEngine::try_new(&eng, b_test, o.ctx, b_test * 2 + 16, b_test * 2 + 16, true, max_mem).unwrap();
+        be.set_prefix(&toks[..p_len]);
+        // Compare step_tokens(None) vs step_logits argmax on the exact same state
+        let mut s_ref = be.make_seq_slots(b_test, true);
+        for (b, s) in s_ref.iter_mut().enumerate() { s.next_tok = if b == 0 { toks[p_len] } else { 3000 + (b * 137) as u32 }; }
+        let lgs = be.step_logits(&mut s_ref);
+        let ref_am: Vec<u32> = lgs.iter().map(|v| am(v) as u32).collect();
+        drop(be);
+
+        let mut be2 = BatchEngine::try_new(&eng, b_test, o.ctx, b_test * 2 + 16, b_test * 2 + 16, true, max_mem).unwrap();
+        be2.set_prefix(&toks[..p_len]);
+        let mut s_am = be2.make_seq_slots(b_test, true);
+        for (b, s) in s_am.iter_mut().enumerate() { s.next_tok = if b == 0 { toks[p_len] } else { 3000 + (b * 137) as u32 }; }
+        let fused_am = be2.step_tokens(&mut s_am, None);
+        let match_am = fused_am.iter().zip(&ref_am).filter(|(a, b)| a == b).count();
+        println!("  fused k_lmhead_argmax exact match: {match_am}/{b_test} (stream 0: {} vs {})", fused_am[0], ref_am[0]);
+
+        let sc = SampleCfg { temp: 1.0, top_k: 64, top_p: 0.95, seed: 42 };
+        let sampled = be2.step_tokens(&mut s_am, Some(sc));
+        let in_range = sampled.iter().all(|&t| (t as usize) < nv);
+        let mut uniq = sampled.clone(); uniq.sort(); uniq.dedup();
+        println!("  GPU top-k/top-p sampler: all in [0..{nv}) = {in_range}, unique tokens = {}/{b_test} {:?}", uniq.len(), &sampled[..b_test.min(8)]);
+    }
+}
+
+fn prof_batch(o: &Opts) {
+    let eng = Engine::load(&o.model, o.ctx);
+    let b: usize = o.batch.split(',').next().unwrap().parse().expect("batch size");
+    let ctx_pos = if o.n_set { o.n } else { 256 };
+    let shared = o.shared || !o.independent;
+    let max_mem = BatchEngine::safe_mem_limit(&eng, o.max_mem);
+    let sample = if std::env::args().any(|a| a == "--temp") && o.temp > 0.0 {
+        Some(SampleCfg { temp: o.temp, top_k: o.top_k, top_p: o.top_p, seed: o.seed })
+    } else { None };
+    let suf_pos = if shared { 16usize } else { ctx_pos.max(16) };
+    let pages_full = b * (suf_pos + 1).div_ceil(batch::KV_BLK) + 16;
+    let pages_swa = b * (suf_pos + 1).div_ceil(batch::KV_BLK).min(batch::SWA_RING_BLKS) + 16;
+    let mut be = BatchEngine::try_new(&eng, b, o.ctx, pages_swa, pages_full, sample.is_some(), max_mem)
+        .unwrap_or_else(|e| { eprintln!("error: {e}"); std::process::exit(1) });
+    be.profile_decode(b, ctx_pos, shared, sample);
+}
+
+fn run_multistream(o: &Opts) {
+    let eng = Engine::load(&o.model, 64);
+    let tk = Tokenizer::load(&eng.g);
+    let adapter = MsAdapter::load(&eng, &o.adapter).unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    });
+    let sil = adapter.silence_id;
+    let eom = adapter.eom_id;
+    let nf = adapter.native_framing;
+    let pre = adapter.preamble.clone();
+    let mut ms = MsEngine::new(&eng, adapter, o.max_kv);
+    if nf && !pre.is_empty() {
+        ms.warm_preamble(&tk.encode(&pre, true));
+    }
+    let temp = if o.temp_set { o.temp } else { 0.0 };
+    let mut sampler = MsSamplerCfg::new(temp, o.top_k, o.top_p, o.silence_penalty, o.seed);
+
+    let enc_u = |s: &str| -> Vec<u32> {
+        let mut v = if nf {
+            tk.encode(&format!("<|message_user|><|content_text|>{s}"), true)
+        } else {
+            tk.encode(s, true)
+        };
+        v.push(eom);
+        v
+    };
+
+    let mut q: [VecDeque<u32>; 3] = [VecDeque::new(), VecDeque::new(), VecDeque::new()];
+    for t in enc_u(&o.prompt) { q[CH_USER_IN].push_back(t); }
+
+    let mut int_toks: Option<Vec<u32>> = if !o.interrupt.is_empty() {
+        Some(enc_u(&o.interrupt))
+    } else {
+        None
+    };
+
+    let mut peer_scheduled: Option<(u32, Vec<u32>)> = None;
+    let mut peer_buf: Vec<u32> = Vec::new();
+    let mut out_toks: [Vec<u32>; 4] = Default::default();
+    let mut idle_ticks = 0usize;
+    let mut total_ms = 0.0f64;
+    let mut ran_ticks = 0usize;
+
+    for tick in 0..o.ticks as u32 {
+        if tick == o.interrupt_at {
+            if let Some(vt) = int_toks.take() {
+                for t in vt { q[CH_USER_IN].push_back(t); }
+            }
+        }
+        if let Some((at, _)) = &peer_scheduled {
+            if tick >= *at {
+                let (_, vt) = peer_scheduled.take().unwrap();
+                for t in vt { q[CH_AGENT_IN].push_back(t); }
+            }
+        }
+        let inputs = [q[0].pop_front(), q[1].pop_front(), q[2].pop_front()];
+        let res = ms.step_tick(inputs, &mut sampler);
+        total_ms += res.elapsed_ms;
+        ran_ticks += 1;
+
+        for i in 0..4 {
+            if res.emitted[i] != sil {
+                out_toks[i].push(res.emitted[i]);
+            }
+        }
+        // Optional auto-peer response for CLI testing
+        if !o.peer_kv.is_empty() && res.emitted[2] != sil {
+            if res.emitted[2] == eom {
+                let req_bytes: Vec<u8> = peer_buf.iter().flat_map(|&t| tk.decode_bytes(t)).collect();
+                let req = String::from_utf8_lossy(&req_bytes).to_ascii_lowercase();
+                let mut reply = String::new();
+                for pair in o.peer_kv.split(',') {
+                    if let Some((k, v)) = pair.trim().split_once('=') {
+                        if req.contains(&k.trim().to_ascii_lowercase()) {
+                            reply = format!("{}={}", k.trim(), v.trim());
+                            break;
+                        }
+                    }
+                }
+                if reply.is_empty() { reply = o.peer_kv.split(',').next().unwrap_or("ok").trim().to_string(); }
+                let mut rt = tk.encode(&reply, true);
+                rt.push(eom);
+                peer_scheduled = Some((tick + 6, rt));
+                peer_buf.clear();
+            } else {
+                peer_buf.push(res.emitted[2]);
+            }
+        }
+
+        let any_act = inputs.iter().any(|x| x.is_some()) || res.emitted.iter().any(|&t| t != sil);
+        if any_act || q.iter().any(|x| !x.is_empty()) || int_toks.is_some() || peer_scheduled.is_some() {
+            idle_ticks = 0;
+        } else {
+            idle_ticks += 1;
+            if idle_ticks >= 8 { break; }
+        }
+    }
+
+    let names = ["thinking", "user_output", "agent_msg_output", "tool_calls"];
+    for i in 0..4 {
+        let bytes: Vec<u8> = out_toks[i].iter().flat_map(|&t| tk.decode_bytes(t)).collect();
+        let text = String::from_utf8_lossy(&bytes);
+        println!("[{:16}] ({:3} tok): {}", names[i], out_toks[i].len(), text);
+    }
+    let avg_ms = total_ms / ran_ticks.max(1) as f64;
+    eprintln!(
+        "[multistream] {} ticks @ {:.1} ticks/s ({:.1} ms/tick) | non-silent KV {} | GPU working {:.1} MiB",
+        ran_ticks,
+        1000.0 / avg_ms.max(0.01),
+        avg_ms,
+        ms.kv_ticks.len(),
+        ms.mem_bytes() as f64 / (1 << 20) as f64
+    );
+}
+
+fn run_serve(o: &Opts) {
+    let eng = Engine::load(&o.model, 64);
+    let tk = Tokenizer::load(&eng.g);
+    let temp = if o.temp_set { o.temp } else { 0.4 };
+    let path = if std::path::Path::new(&o.adapter).exists() {
+        o.adapter.as_str()
+    } else {
+        "/Users/eris/Documents/Programming/Projects/inkling-multistream/checkpoints/sft_adapter_v3_best.imsa"
+    };
+    webui::run_server(&eng, tk, path, o.port, o.max_kv, temp, o.seed);
 }

@@ -29,6 +29,11 @@ impl<'a> Session<'a> {
         Session { eng, tk, n_past: 0, pending: None, stats: Stats::default() }
     }
 
+    /// Resume a session whose first `n_past` tokens are already committed in `eng`'s KV/conv cache.
+    pub fn resume(eng: &'a Engine, tk: &'a Tokenizer, n_past: usize) -> Session<'a> {
+        Session { eng, tk, n_past, pending: None, stats: Stats::default() }
+    }
+
     pub fn ctx_left(&self) -> usize { self.eng.max_ctx.saturating_sub(self.n_past + 1) }
 
     /// Feed `toks` (preceded by any pending sampled token) through the model in prefill chunks.

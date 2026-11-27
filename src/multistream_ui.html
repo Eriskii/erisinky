@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Inkling 2 Mini · 7-Channel Multi-Stream</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #121722;
+    --panel-2: #171e2d;
+    --border: #252f45;
+    --text: #e6ecf7;
+    --muted: #8a97b1;
+    --dim: #52607a;
+    --ch0: #60a5fa; /* user_input */
+    --ch1: #f59e0b; /* agent_msg_input */
+    --ch2: #22d3ee; /* tool_input */
+    --ch3: #a78bfa; /* thinking */
+    --ch4: #34d399; /* user_output */
+    --ch5: #fbbf24; /* agent_msg_output */
+    --ch6: #38bdf8; /* tool_calls */
+    --danger: #f87171;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    line-height: 1.45;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    font-size: 14px;
+    letter-spacing: -0.01em;
+    margin-right: 6px;
+  }
+  .brand-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--ch3), var(--ch4));
+    box-shadow: 0 0 10px var(--ch3);
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 9px; border-radius: 999px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+  }
+  .pill strong { color: var(--text); font-weight: 600; }
+  .pill.status-run { border-color: rgba(52,211,153,0.45); color: var(--ch4); }
+  .pill.status-run::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--ch4); animation: pulse 1.2s infinite;
+  }
+  .pill.status-pause { border-color: rgba(251,191,36,0.4); color: var(--ch5); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  select, input[type="text"], textarea {
+    background: #0d121c;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-family: inherit;
+    font-size: 12px;
+    outline: none;
+  }
+  select:focus, input[type="text"]:focus, textarea:focus { border-color: var(--ch0); }
+  button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  button:hover { background: #212a3f; border-color: #3a4968; }
+  button.primary { background: #1d4ed8; border-color: #2563eb; color: #fff; }
+  button.primary:hover { background: #2563eb; }
+  button.emerald { background: #065f46; border-color: #10b981; color: #ecfdf5; }
+  button.emerald:hover { background: #047857; }
+  button.amber { background: #78350f; border-color: #f59e0b; color: #fef3c7; }
+  button.amber:hover { background: #92400e; }
+  button.danger { background: #451a1a; border-color: #991b1b; color: #fecaca; }
+  button.danger:hover { background: #7f1d1d; }
+  .spacer { flex: 1; }
+
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: #0f141e;
+    border-bottom: 1px solid var(--border);
+  }
+  .toolbar-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--dim); font-weight: 600;
+  }
+  .slider-group {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 8px; border-radius: 6px;
+    background: var(--panel); border: 1px solid var(--border);
+    font-size: 11px; color: var(--muted);
+  }
+  .slider-group input[type="range"] { width: 72px; accent-color: var(--ch3); }
+  .slider-group span.val { font-family: var(--mono); color: var(--text); min-width: 32px; text-align: right; }
+
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px 16px 18px;
+    max-width: 1680px;
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  /* 4-channel output grid */
+  .out-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  @media (max-width: 900px) { .out-grid { grid-template-columns: 1fr; } }
+  .ch-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 205px;
+    max-height: 290px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .ch-card.speaking {
+    box-shadow: 0 0 0 1px var(--accent), 0 0 18px -6px var(--accent);
+    border-color: var(--accent);
+  }
+  .ch-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 12px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+  }
+  .ch-badge {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+    opacity: 0.35; transition: opacity 0.1s, transform 0.1s;
+  }
+  .ch-card.speaking .ch-badge { opacity: 1; transform: scale(1.25); box-shadow: 0 0 8px var(--accent); }
+  .ch-title { font-family: var(--mono); font-weight: 700; font-size: 12px; color: var(--accent); }
+  .ch-sub { font-size: 11px; color: var(--dim); }
+  .sil-meter {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 10px; color: var(--muted);
+  }
+  .sil-bar {
+    width: 54px; height: 5px; border-radius: 3px;
+    background: #1e293b; overflow: hidden;
+  }
+  .sil-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.08s; }
+  .ch-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 12px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text);
+  }
+  .ch-body .eom-sep {
+    display: inline-block;
+    margin: 0 4px;
+    padding: 0 5px;
+    border-radius: 4px;
+    background: rgba(148,163,184,0.14);
+    color: var(--muted);
+    font-size: 10px;
+    vertical-align: middle;
+  }
+  .ch-body .tool-tok {
+    display: inline-block;
+    padding: 0 5px;
+    border-radius: 4px;
+    background: rgba(56,189,248,0.18);
+    color: var(--ch6);
+    font-size: 11px;
+  }
+  .ch-body .empty-hint { color: var(--dim); font-style: italic; font-family: var(--sans); font-size: 12px; }
+
+  /* 3-channel input injectors */
+  .in-grid {
+    display: grid;
+    grid-template-columns: 1.5fr 1fr 1fr;
+    gap: 12px;
+  }
+  @media (max-width: 1050px) { .in-grid { grid-template-columns: 1fr; } }
+  .in-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .in-head {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .in-row { display: flex; gap: 6px; align-items: center; }
+  .in-row input[type="text"] { flex: 1; }
+  .in-log {
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    max-height: 48px; overflow-y: auto;
+    background: #0d121c; border-radius: 6px; padding: 4px 8px;
+    border: 1px solid #1c2436;
+  }
+  .toggle {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; color: var(--muted); cursor: pointer;
+    margin-left: auto;
+  }
+  .toggle input { accent-color: var(--ch4); cursor: pointer; }
+
+  /* 7-track tick timeline */
+  .timeline-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .timeline-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 12px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+  }
+  .timeline-wrap {
+    overflow-x: auto;
+    padding: 8px 10px;
+    background: #0c1018;
+  }
+  .tl-grid {
+    display: grid;
+    grid-template-columns: 124px 1fr;
+    gap: 2px 0;
+    min-width: max-content;
+  }
+  .tl-label {
+    position: sticky; left: 0; z-index: 2;
+    background: #0c1018;
+    font-family: var(--mono); font-size: 11px;
+    padding: 3px 8px 3px 2px;
+    display: flex; align-items: center; gap: 6px;
+    border-right: 1px solid var(--border);
+  }
+  .tl-row {
+    display: flex; align-items: center; gap: 2px;
+    padding-left: 6px;
+    height: 22px;
+  }
+  .tl-hdr {
+    font-family: var(--mono); font-size: 9.5px; color: var(--dim);
+    min-width: 34px; text-align: center;
+  }
+  .tl-cell {
+    min-width: 34px; max-width: 78px; height: 18px;
+    border-radius: 3px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 10px;
+    padding: 0 3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .tl-cell.sil {
+    background: transparent;
+    color: #273248;
+  }
+  .tl-cell.act {
+    background: var(--cbg);
+    color: var(--cfg);
+    border-color: var(--cbd);
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="brand-dot"></span>
+    <span>Inkling 2 Mini · Multi-Stream</span>
+  </div>
+  <select id="adapterSel" title="Switch .imsa Multi-Stream Adapter"></select>
+  <span id="statusPill" class="pill status-pause">IDLE</span>
+  <span class="pill">Tick <strong id="mTick">0</strong></span>
+  <span class="pill">Speed <strong id="mTps">0.0</strong> t/s</span>
+  <span class="pill">KV <strong id="mKv">0</strong></span>
+  <span class="pill">GPU <strong id="mMem">0</strong> MiB</span>
+  <div class="spacer"></div>
+  <button id="btnRun" class="emerald" onclick="ctrl('start')">▶ Run</button>
+  <button id="btnPause" onclick="ctrl('pause')">⏸ Pause</button>
+  <button onclick="ctrl('step', 1)">⏭ +1</button>
+  <button onclick="ctrl('step', 16)">⏭ +16</button>
+  <button class="danger" onclick="ctrl('reset')">↺ Reset</button>
+</header>
+
+<div class="toolbar">
+  <span class="toolbar-label">Presets</span>
+  <button onclick="runPreset('math')">🧮 Streaming Math</button>
+  <button onclick="runPreset('interrupt')">⚡ Mid-Stream Interrupt</button>
+  <button onclick="runPreset('duplex')">🦡 Duplex Interject</button>
+  <button onclick="runPreset('fs_memory')">📂 FS Memory Chat</button>
+  <button onclick="runPreset('peer')">🤝 Async Peer</button>
+  <button onclick="runPreset('tool')">🔧 Async Calc</button>
+  <button onclick="runPreset('chat')">💬 Chat</button>
+  <button onclick="runPreset('code')">🐍 Python</button>
+  <div class="spacer"></div>
+  <label class="slider-group" title="0.0 = greedy; 0.6 = natural conversation">
+    Temp
+    <input id="sTemp" type="range" min="0" max="1.2" step="0.05" value="0.6" oninput="pushCfg()">
+    <span id="vTemp" class="val">0.60</span>
+  </label>
+  <label id="silWrap" class="slider-group" title="LoRA adapter mode only (unused in Base 26.4B Native mode)">
+    Sil Pen
+    <input id="sSil" type="range" min="-2.0" max="2.0" step="0.1" value="0.0" oninput="pushCfg()">
+    <span id="vSil" class="val">0.0</span>
+  </label>
+  <label class="slider-group" title="Add slow-motion delay between ticks to watch channels unfold">
+    Slow-Mo
+    <input id="sDelay" type="range" min="0" max="250" step="10" value="0" oninput="pushCfg()">
+    <span id="vDelay" class="val">0ms</span>
+  </label>
+  <label class="slider-group" style="cursor:pointer;">
+    <input id="chkIdle" type="checkbox" checked onchange="pushCfg()"> Auto-Pause Idle
+  </label>
+</div>
+
+<main>
+  <!-- 4 Model Output Channels -->
+  <section class="out-grid">
+    <div id="card3" class="ch-card" style="--accent: var(--ch3)">
+      <div class="ch-head">
+        <span class="ch-badge"></span>
+        <span class="ch-title">ch3 · thinking</span>
+        <span class="ch-sub">internal scratchpad</span>
+        <div class="sil-meter">
+          <span id="cnt3">0 tok</span>
+          <div class="sil-bar"><div id="bar3" class="sil-fill"></div></div>
+        </div>
+      </div>
+      <div id="out3" class="ch-body"><span class="empty-hint">Silent — waiting for input…</span></div>
+    </div>
+
+    <div id="card4" class="ch-card" style="--accent: var(--ch4)">
+      <div class="ch-head">
+        <span class="ch-badge"></span>
+        <span class="ch-title">ch4 · user_output</span>
+        <span class="ch-sub">live user stream</span>
+        <div class="sil-meter">
+          <span id="cnt4">0 tok</span>
+          <div class="sil-bar"><div id="bar4" class="sil-fill"></div></div>
+        </div>
+      </div>
+      <div id="out4" class="ch-body"><span class="empty-hint">Silent — waiting for input…</span></div>
+    </div>
+
+    <div id="card5" class="ch-card" style="--accent: var(--ch5)">
+      <div class="ch-head">
+        <span class="ch-badge"></span>
+        <span class="ch-title">ch5 · agent_msg_output</span>
+        <span class="ch-sub">outbound peer agent</span>
+        <div class="sil-meter">
+          <span id="cnt5">0 tok</span>
+          <div class="sil-bar"><div id="bar5" class="sil-fill"></div></div>
+        </div>
+      </div>
+      <div id="out5" class="ch-body"><span class="empty-hint">Silent — no peer message sent…</span></div>
+    </div>
+
+    <div id="card6" class="ch-card" style="--accent: var(--ch6)">
+      <div class="ch-head">
+        <span class="ch-badge"></span>
+        <span class="ch-title">ch6 · tool_calls</span>
+        <span class="ch-sub">outbound tool invocations</span>
+        <div class="sil-meter">
+          <span id="cnt6">0 tok</span>
+          <div class="sil-bar"><div id="bar6" class="sil-fill"></div></div>
+        </div>
+      </div>
+      <div id="out6" class="ch-body"><span class="empty-hint">Silent — no tool invoked…</span></div>
+    </div>
+  </section>
+
+  <!-- 3 External Input Injectors (work live mid-stream!) -->
+  <section class="in-grid">
+    <div class="in-card">
+      <div class="in-head">
+        <span class="ch-title" style="color:var(--ch0)">ch0 · user_input</span>
+        <span class="ch-sub">Send anytime — even mid-generation to interrupt!</span>
+      </div>
+      <div class="in-row">
+        <input id="in0" type="text" placeholder="Type a prompt or mid-stream interrupt (Enter to send)…" onkeydown="if(event.key==='Enter')sendIn(0)">
+        <button class="primary" onclick="sendIn(0)">Send / ⚡ Interrupt</button>
+      </div>
+      <div id="log0" class="in-log">Queue empty</div>
+    </div>
+
+    <div class="in-card">
+      <div class="in-head">
+        <span class="ch-title" style="color:var(--ch1)">ch1 · agent_msg_input</span>
+        <label class="toggle"><input id="chkPeer" type="checkbox" checked onchange="pushCfg()"> Auto-Peer</label>
+      </div>
+      <div class="in-row">
+        <input id="in1" type="text" placeholder="Inject peer message (e.g. code_18=831)…" onkeydown="if(event.key==='Enter')sendIn(1)">
+        <button class="amber" onclick="sendIn(1)">Inject Peer</button>
+      </div>
+      <div class="in-row" style="font-size:11px; color:var(--muted);">
+        <span>Auto-Peer KV:</span>
+        <input id="peerKv" type="text" value="code_18=831, code_42=519, status=ready" onchange="pushCfg()" style="font-family:var(--mono); font-size:11px;">
+      </div>
+    </div>
+
+    <div class="in-card">
+      <div class="in-head">
+        <span class="ch-title" style="color:var(--ch2)">ch2 · tool_input</span>
+        <label class="toggle"><input id="chkTool" type="checkbox" checked onchange="pushCfg()"> Auto-Calc Tool</label>
+      </div>
+      <div class="in-row">
+        <input id="in2" type="text" placeholder='Inject tool output (e.g. {"result": 42})…' onkeydown="if(event.key==='Enter')sendIn(2)">
+        <button onclick="sendIn(2)">Inject Tool</button>
+      </div>
+      <div id="log2" class="in-log">Auto-Calc executes JSON calc calls after 5 ticks</div>
+    </div>
+  </section>
+
+  <!-- 7-Track Tick Timeline -->
+  <section class="timeline-card">
+    <div class="timeline-head">
+      <span class="toolbar-label" style="color:var(--text)">7-Channel Synchronized Tick Timeline</span>
+      <span class="ch-sub" id="tlNote">Showing latest 120 ticks · Option B sparse inputs + dense 4 outputs</span>
+      <div class="spacer"></div>
+      <span id="hoverInfo" class="ch-sub" style="font-family:var(--mono);">Hover any cell for token details</span>
+    </div>
+    <div id="tlWrap" class="timeline-wrap">
+      <div id="tlGrid" class="tl-grid"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const CH_META = [
+  { name: "0 user_in",   color: "#60a5fa", bg: "rgba(96,165,250,0.18)",  bd: "rgba(96,165,250,0.45)" },
+  { name: "1 agent_in",  color: "#f59e0b", bg: "rgba(245,158,11,0.18)",  bd: "rgba(245,158,11,0.45)" },
+  { name: "2 tool_in",   color: "#22d3ee", bg: "rgba(34,211,238,0.18)",  bd: "rgba(34,211,238,0.45)" },
+  { name: "3 thinking",  color: "#a78bfa", bg: "rgba(167,139,250,0.20)", bd: "rgba(167,139,250,0.50)" },
+  { name: "4 user_out",  color: "#34d399", bg: "rgba(52,211,153,0.20)",  bd: "rgba(52,211,153,0.50)" },
+  { name: "5 agent_out", color: "#fbbf24", bg: "rgba(251,191,36,0.20)",  bd: "rgba(251,191,36,0.50)" },
+  { name: "6 tool_call", color: "#38bdf8", bg: "rgba(56,189,248,0.20)",  bd: "rgba(56,189,248,0.50)" },
+];
+
+const MAX_TL = 120;
+let ticks = [];
+let outCounts = [0, 0, 0, 0];
+let outHasText = [false, false, false, false];
+let lastTickMs = [];
+let evSource = null;
+
+function escHtml(s) {
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+function fmtCellText(t) {
+  if (t.id === 200010) return "⏎";
+  if (t.id === 200049) return "🔧";
+  if (t.id === 200009) return "📡";
+  if (t.id === 200000) return "👤";
+  if (t.id === 200001) return "🤖";
+  if (t.id === 200003) return "🧰";
+  if (t.id === 200004) return "💬";
+  if (t.id === 200008) return "💭";
+  const s = (t.txt || "").replace(/\n/g, "↵").replace(/ /g, "·");
+  return s.length > 7 ? s.slice(0, 6) + "…" : (s || ("#" + t.id));
+}
+
+function appendOutToken(outIdx, tok) {
+  const ch = outIdx + 3;
+  const card = document.getElementById("card" + ch);
+  const el = document.getElementById("out" + ch);
+  if (tok.sil) {
+    card.classList.remove("speaking");
+    return;
+  }
+  card.classList.add("speaking");
+  // Hide native Inkling structural header tokens in the readable card view (still visible on timeline!)
+  if (tok.id === 200001 || tok.id === 200004 || tok.id === 200008) {
+    return;
+  }
+  if (!outHasText[outIdx]) {
+    el.innerHTML = "";
+    outHasText[outIdx] = true;
+  }
+  outCounts[outIdx]++;
+  document.getElementById("cnt" + ch).textContent = outCounts[outIdx] + " tok";
+  if (tok.id === 200010) {
+    const sp = document.createElement("span");
+    sp.className = "eom-sep";
+    sp.textContent = "EOM";
+    el.appendChild(sp);
+    el.appendChild(document.createTextNode("\n"));
+  } else if (tok.id === 200049) {
+    const sp = document.createElement("span");
+    sp.className = "tool-tok";
+    sp.textContent = "🔧 ";
+    el.appendChild(sp);
+  } else if (tok.id === 200009) {
+    const sp = document.createElement("span");
+    sp.className = "tool-tok";
+    sp.textContent = "📡 ";
+    el.appendChild(sp);
+  } else {
+    el.appendChild(document.createTextNode(tok.txt || ""));
+  }
+  el.scrollTop = el.scrollHeight;
+}
+
+function updateMeters(tickObj) {
+  document.getElementById("mTick").textContent = tickObj.tick + 1;
+  document.getElementById("mKv").textContent = tickObj.n_kv;
+  if (tickObj.ms > 0) {
+    lastTickMs.push(tickObj.ms);
+    if (lastTickMs.length > 16) lastTickMs.shift();
+    const avg = lastTickMs.reduce((a,b)=>a+b, 0) / lastTickMs.length;
+    document.getElementById("mTps").textContent = (1000 / Math.max(avg, 0.1)).toFixed(1);
+  }
+  if (tickObj.sil_p) {
+    for (let i = 0; i < 4; i++) {
+      const actPct = Math.round((1 - Math.min(1, Math.max(0, tickObj.sil_p[i]))) * 100);
+      document.getElementById("bar" + (i + 3)).style.width = actPct + "%";
+    }
+  }
+}
+
+function renderTimeline() {
+  const slice = ticks.slice(-MAX_TL);
+  const grid = document.getElementById("tlGrid");
+  let html = `<div class="tl-label" style="color:var(--dim)">tick #</div><div class="tl-row">`;
+  for (const tk of slice) html += `<div class="tl-hdr">${tk.tick}</div>`;
+  html += `</div>`;
+
+  for (let ch = 0; ch < 7; ch++) {
+    const meta = CH_META[ch];
+    html += `<div class="tl-label" style="color:${meta.color}">${meta.name}</div><div class="tl-row">`;
+    for (const tk of slice) {
+      const cell = ch < 3 ? tk.ins[ch] : tk.outs[ch - 3];
+      if (!cell || cell.sil) {
+        html += `<div class="tl-cell sil" title="tick ${tk.tick} · ${meta.name} · silent">·</div>`;
+      } else {
+        const lbl = escHtml(fmtCellText(cell));
+        const info = escHtml(`tick ${tk.tick} · ${meta.name} · id=${cell.id} · ${JSON.stringify(cell.txt)}`);
+        html += `<div class="tl-cell act" style="--cbg:${meta.bg};--cfg:${meta.color};--cbd:${meta.bd}" onmouseenter="document.getElementById('hoverInfo').textContent=this.dataset.i" data-i="${info}">${lbl}</div>`;
+      }
+    }
+    html += `</div>`;
+  }
+  grid.innerHTML = html;
+  const wrap = document.getElementById("tlWrap");
+  wrap.scrollLeft = wrap.scrollWidth;
+}
+
+function clearViews() {
+  ticks = [];
+  outCounts = [0, 0, 0, 0];
+  outHasText = [false, false, false, false];
+  lastTickMs = [];
+  const hints = [
+    "Silent — waiting for input…",
+    "Silent — waiting for input…",
+    "Silent — no peer message sent…",
+    "Silent — no tool invoked…"
+  ];
+  for (let i = 0; i < 4; i++) {
+    const ch = i + 3;
+    document.getElementById("card" + ch).classList.remove("speaking");
+    document.getElementById("out" + ch).innerHTML = `<span class="empty-hint">${hints[i]}</span>`;
+    document.getElementById("cnt" + ch).textContent = "0 tok";
+    document.getElementById("bar" + ch).style.width = "0%";
+  }
+  document.getElementById("mTick").textContent = "0";
+  document.getElementById("mKv").textContent = "0";
+  document.getElementById("log0").textContent = "Queue empty";
+  renderTimeline();
+}
+
+function setStatus(running, memMib) {
+  const pill = document.getElementById("statusPill");
+  if (running) {
+    pill.textContent = "STREAMING";
+    pill.className = "pill status-run";
+  } else {
+    pill.textContent = "IDLE / PAUSED";
+    pill.className = "pill status-pause";
+    for (let ch = 3; ch <= 6; ch++) document.getElementById("card" + ch).classList.remove("speaking");
+  }
+  if (memMib !== undefined) document.getElementById("mMem").textContent = Math.round(memMib);
+}
+
+async function postJson(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+async function sendIn(ch) {
+  const inp = document.getElementById("in" + ch);
+  const text = inp.value;
+  if (!text.trim()) return;
+  inp.value = "";
+  const r = await postJson("/api/send", { channel: ch, text, eom: true, auto_start: true });
+  if (ch === 0) {
+    document.getElementById("log0").textContent = `Sent (${r.queued_tokens} tok): ${text}`;
+  } else if (ch === 2) {
+    document.getElementById("log2").textContent = `Injected (${r.queued_tokens} tok): ${text}`;
+  }
+}
+
+async function ctrl(action, n = 1) {
+  if (action === "start") {
+    const inp = document.getElementById("in0");
+    if (inp.value.trim()) {
+      await sendIn(0);
+      return;
+    }
+  }
+  await postJson("/api/control", { action, n });
+}
+
+function updateModeUi() {
+  document.getElementById("silWrap").style.opacity = "1.0";
+}
+
+async function runPreset(name) {
+  await postJson("/api/preset", { name });
+}
+
+async function pushCfg() {
+  const temp = parseFloat(document.getElementById("sTemp").value);
+  const sil = parseFloat(document.getElementById("sSil").value);
+  const delay = parseInt(document.getElementById("sDelay").value, 10);
+  document.getElementById("vTemp").textContent = temp.toFixed(2);
+  document.getElementById("vSil").textContent = sil.toFixed(1);
+  document.getElementById("vDelay").textContent = delay + "ms";
+  await postJson("/api/config", {
+    temp,
+    silence_penalty: sil,
+    tick_delay_ms: delay,
+    auto_pause_idle: document.getElementById("chkIdle").checked,
+    auto_peer: document.getElementById("chkPeer").checked,
+    auto_tool: document.getElementById("chkTool").checked,
+    peer_kv: document.getElementById("peerKv").value,
+  });
+}
+
+document.getElementById("adapterSel").addEventListener("change", async (e) => {
+  setStatus(false);
+  updateModeUi();
+  await postJson("/api/adapter", { path: e.target.value });
+});
+
+async function init() {
+  const st = await (await fetch("/api/state")).json();
+  const sel = document.getElementById("adapterSel");
+  sel.innerHTML = "";
+  for (const a of st.adapters || []) {
+    const opt = document.createElement("option");
+    opt.value = a.path;
+    opt.textContent = a.name;
+    if (a.path === st.active_adapter) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  updateModeUi();
+  document.getElementById("sTemp").value = st.temp;
+  document.getElementById("vTemp").textContent = Number(st.temp).toFixed(2);
+  document.getElementById("sSil").value = st.silence_penalty;
+  document.getElementById("vSil").textContent = Number(st.silence_penalty).toFixed(1);
+  document.getElementById("sDelay").value = st.tick_delay_ms;
+  document.getElementById("vDelay").textContent = st.tick_delay_ms + "ms";
+  document.getElementById("chkIdle").checked = st.auto_pause_idle;
+  document.getElementById("chkPeer").checked = st.auto_peer;
+  document.getElementById("chkTool").checked = st.auto_tool;
+  if (st.peer_kv) document.getElementById("peerKv").value = st.peer_kv;
+  setStatus(st.running, st.mem_mib);
+
+  clearViews();
+  for (const tk of st.history || []) {
+    ticks.push(tk);
+    for (let i = 0; i < 4; i++) appendOutToken(i, tk.outs[i]);
+    updateMeters(tk);
+  }
+  renderTimeline();
+
+  if (evSource) evSource.close();
+  evSource = new EventSource("/api/events");
+  evSource.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "tick") {
+      ticks.push(msg);
+      if (ticks.length > 600) ticks.shift();
+      for (let i = 0; i < 4; i++) appendOutToken(i, msg.outs[i]);
+      updateMeters(msg);
+      setStatus(msg.running, msg.mem_mib);
+      renderTimeline();
+    } else if (msg.type === "reset") {
+      clearViews();
+      setStatus(msg.running, msg.mem_mib);
+      if (msg.silence_penalty !== undefined) {
+        document.getElementById("sSil").value = msg.silence_penalty;
+        document.getElementById("vSil").textContent = Number(msg.silence_penalty).toFixed(1);
+      }
+      if (msg.note) document.getElementById("log0").textContent = msg.note;
+    } else if (msg.type === "status") {
+      setStatus(msg.running, msg.mem_mib);
+      if (msg.note) document.getElementById("log0").textContent = msg.note;
+    }
+  };
+}
+
+init();
+</script>
+</body>
+</html>

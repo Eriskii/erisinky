@@ -64,6 +64,21 @@ inline void deq16(device const uchar * row, uint wtype, uint k0, thread half * o
         }
         return;
     }
+    if (wtype == 14) {          // Q6_K: vectorized 4-wide unpack (16 weights, bit-identical to scalar)
+        device const block_q6_K * b = (device const block_q6_K *) row + k0 / 256;
+        const uint w = k0 % 256, n = w / 128, g = (w % 128) / 32, l0 = w % 32;
+        const float df = float(b->d) * float(b->scales[8 * n + l0 / 16 + 2 * g]);
+        device const packed_uchar4 * ql = (device const packed_uchar4 *) (b->ql + 64 * n + (g & 1) * 32 + l0);
+        device const packed_uchar4 * qh = (device const packed_uchar4 *) (b->qh + 32 * n + l0);
+        const uint s4 = (g >> 1) * 4, s2 = 2 * g;
+        thread half4 * o = (thread half4 *) out;
+        for (int i = 0; i < 4; i++) {
+            const uint4 l4 = uint4(uchar4(ql[i])), h4 = uint4(uchar4(qh[i]));
+            const int4 q = int4(((l4 >> s4) & 0xFu) | (((h4 >> s2) & 3u) << 4)) - 32;
+            o[i] = half4(float4(q) * df);
+        }
+        return;
+    }
     if (wtype == 12) {          // Q4_K
         device const block_q4_K * b = (device const block_q4_K *) row + k0 / 256;
         const uint w = k0 % 256, j = w / 32, hp = (w % 32) / 16;
@@ -996,8 +1011,9 @@ kernel void k_ctrl_apply_b(device const uchar * PB [[buffer(1)]], device float *
 // Specialized on (number of states, number of queries) so every register array is statically indexed.
 template <int NS, int NQ, bool IDENT>
 kernel void k_mix_b(device const uchar * PB [[buffer(1)]], device float * A [[buffer(2)]], constant MixJob & J [[buffer(5)]],
-                    uint tg [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
-    const uint tok = tg * 4 + sg;
+                    uint tg [[threadgroup_position_in_grid]], ushort sg [[simdgroup_index_in_threadgroup]],
+                    ushort nsg [[simdgroups_per_threadgroup]], ushort lane [[thread_index_in_simdgroup]]) {
+    const uint tok = tg * nsg + sg;
     if (tok >= J.pad_t) return;
     const uint toff = tok * J.tstride;
     device const float4 * S[NS];
@@ -1079,11 +1095,11 @@ kernel void k_mix_b(device const uchar * PB [[buffer(1)]], device float * A [[bu
         }
     }
 }
-#define MIXB(NS, NQ) template [[host_name("k_mix_b_" #NS "_" #NQ)]] kernel void k_mix_b<NS, NQ, false>(device const uchar *, device float *, constant MixJob &, uint, ushort, ushort);
+#define MIXB(NS, NQ) template [[host_name("k_mix_b_" #NS "_" #NQ)]] kernel void k_mix_b<NS, NQ, false>(device const uchar *, device float *, constant MixJob &, uint, ushort, ushort, ushort);
 MIXB(1, 1) MIXB(2, 1) MIXB(3, 1) MIXB(4, 1) MIXB(5, 1) MIXB(6, 1)
 MIXB(1, 3) MIXB(2, 3) MIXB(3, 3) MIXB(4, 3) MIXB(5, 3) MIXB(6, 3)
 MIXB(1, 4) MIXB(2, 4) MIXB(3, 4) MIXB(4, 4) MIXB(5, 4) MIXB(6, 4)
-template [[host_name("k_mix_b_id")]] kernel void k_mix_b<1, 1, true>(device const uchar *, device float *, constant MixJob &, uint, ushort, ushort);
+template [[host_name("k_mix_b_id")]] kernel void k_mix_b<1, 1, true>(device const uchar *, device float *, constant MixJob &, uint, ushort, ushort, ushort);
 
 // ======================= fp16-activation tensor GEMMs (activations streamed from device memory as half) =======================
 #define HB_M 64
@@ -1255,11 +1271,12 @@ template [[host_name("k_moe_sg4")]] kernel void k_moe_sg<4>(device const uchar *
 // written once; the gain / forget pre-activations never touch memory. grid (T/128, njobs * E/32), 256 threads.
 struct CtrlGfJob { uint gain_w, forget_w, gh_off, u_off, m_off, raw_off, pad0, pad1; };
 struct CtrlGfArgs { uint T, njobs, pad0, pad1; CtrlGfJob job[4]; };
-kernel void k_ctrl_gf(device const uchar * PB [[buffer(1)]], device float * A [[buffer(2)]], constant CtrlGfArgs & a [[buffer(5)]],
-                      uint2 tgq [[threadgroup_position_in_grid]], ushort tid [[thread_index_in_threadgroup]], ushort sg [[simdgroup_index_in_threadgroup]]) {
+template <int NSG>
+kernel void k_ctrl_gf_t(device const uchar * PB [[buffer(1)]], device float * A [[buffer(2)]], constant CtrlGfArgs & a [[buffer(5)]],
+                        uint2 tgq [[threadgroup_position_in_grid]], ushort tid [[thread_index_in_threadgroup]], ushort sg [[simdgroup_index_in_threadgroup]]) {
     threadgroup half sa[2][HB_M * HB_K];
     constant CtrlGfJob & J = a.job[tgq.y / (E / 32)];
-    const uint cb = tgq.y % (E / 32), t0 = (tgq.x * 8 + sg) * 16;
+    const uint cb = tgq.y % (E / 32), t0 = (tgq.x * NSG + sg) * 16;
     const bool on = t0 < a.T;
     const int nt = on ? min(16, (int) (a.T - t0)) : 0;
     auto tA0 = tensor<threadgroup half, dextents<int32_t, 2>, tensor_inline>(sa[0], dextents<int32_t, 2>(HB_K, HB_M));
@@ -1292,6 +1309,8 @@ kernel void k_ctrl_gf(device const uchar * PB [[buffer(1)]], device float * A [[
         }
     }
 }
+template [[host_name("k_ctrl_gf")]] kernel void k_ctrl_gf_t<8>(device const uchar *, device float *, constant CtrlGfArgs &, uint2, ushort, ushort);
+template [[host_name("k_ctrl_gf4")]] kernel void k_ctrl_gf_t<4>(device const uchar *, device float *, constant CtrlGfArgs &, uint2, ushort, ushort);
 // accumulator layout probe for the kernels above: out[tid * 64 + i] = (row << 16 | token) of element i, out[tid * 64 + 63] = capacity
 kernel void k_layout_sg(device float * A [[buffer(2)]], constant uint & out_off [[buffer(5)]], ushort tid [[thread_index_in_threadgroup]]) {
     threadgroup half sa[HB_M * HB_K];

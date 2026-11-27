@@ -73,27 +73,46 @@ pub const MAX_SPLIT: usize = 256;
 pub const CLS_NAMES: &[&str] = &["embed", "mix_attn", "qkv", "attn", "combine", "wo", "mix_ffn", "router", "moe_gu", "moe_down",
                                  "ctrl_down", "ctrl_apply", "out_mix", "lm_head", "argmax",
                                  "kvprep", "wo_post", "gather", "moe_comb", "ffn_post", "ctrl_norm", "topk_route"];
-const C_KVPREP: u32 = 15; const C_WOPOST: u32 = 16; const C_GATHER: u32 = 17; const C_COMB2: u32 = 18; const C_FFNPOST: u32 = 19;
-const C_CTRLN: u32 = 20; const C_TOPK: u32 = 21;
-const C_EMBED: u32 = 0; const C_MIXA: u32 = 1; const C_QKV: u32 = 2; const C_ATTN: u32 = 3; const C_COMB: u32 = 4; const C_WO: u32 = 5;
-const C_MIXF: u32 = 6; const C_ROUTER: u32 = 7; const C_GU: u32 = 8; const C_DOWN: u32 = 9; const C_CTRLD: u32 = 10; const C_CTRLA: u32 = 11;
-const C_OMIX: u32 = 12; const C_LMHEAD: u32 = 13; const C_ARGMAX: u32 = 14;
+pub(crate) const C_KVPREP: u32 = 15; pub(crate) const C_WOPOST: u32 = 16; pub(crate) const C_GATHER: u32 = 17; pub(crate) const C_COMB2: u32 = 18; pub(crate) const C_FFNPOST: u32 = 19;
+pub(crate) const C_CTRLN: u32 = 20; pub(crate) const C_TOPK: u32 = 21;
+pub(crate) const C_EMBED: u32 = 0; pub(crate) const C_MIXA: u32 = 1; pub(crate) const C_QKV: u32 = 2; pub(crate) const C_ATTN: u32 = 3; pub(crate) const C_COMB: u32 = 4; pub(crate) const C_WO: u32 = 5;
+pub(crate) const C_MIXF: u32 = 6; pub(crate) const C_ROUTER: u32 = 7; pub(crate) const C_GU: u32 = 8; pub(crate) const C_DOWN: u32 = 9; pub(crate) const C_CTRLD: u32 = 10; pub(crate) const C_CTRLA: u32 = 11;
+pub(crate) const C_OMIX: u32 = 12; pub(crate) const C_LMHEAD: u32 = 13; pub(crate) const C_ARGMAX: u32 = 14;
 
 pub const KERNELS: &[&str] = &[
     "k_embed", "k_mix", "k_mv", "k_ctrl_down", "k_ctrl_apply", "k_attn", "k_attn_combine",
     "k_moe_gu", "k_moe_down", "k_argmax1", "k_argmax2",
     "k_topk", "k_norm",
-    "k_gemm", "k_moe_gemm", "k_gemm_t", "k_moe_gemm_t", "k_topk_b", "k_moe_route", "k_moe_comb_b", "k_postconv_b", "k_state_upd", "k_kvprep_b", "k_attn_b", "k_attn_bt", "k_ctrl_apply_b", "k_tohalf", "k_gemm_sg8", "k_gemm_sg4", "k_moe_sg8", "k_moe_sg4", "k_ctrl_gf", "k_moe_route3", "k_moe_comb_h", "k_attn_h", "k_kvcopy", "k_mix_b_1_1", "k_mix_b_2_1", "k_mix_b_3_1", "k_mix_b_4_1", "k_mix_b_5_1", "k_mix_b_6_1", "k_mix_b_1_3", "k_mix_b_2_3", "k_mix_b_3_3", "k_mix_b_4_3", "k_mix_b_5_3", "k_mix_b_6_3", "k_mix_b_1_4", "k_mix_b_2_4", "k_mix_b_3_4", "k_mix_b_4_4", "k_mix_b_5_4", "k_mix_b_6_4", "k_mix_b_id",
+    "k_gemm", "k_moe_gemm", "k_gemm_t", "k_moe_gemm_t", "k_topk_b", "k_moe_route", "k_moe_comb_b", "k_postconv_b", "k_state_upd", "k_kvprep_b", "k_attn_b", "k_attn_bt", "k_ctrl_apply_b", "k_tohalf", "k_gemm_sg8", "k_gemm_sg4", "k_moe_sg8", "k_moe_sg4", "k_ctrl_gf", "k_ctrl_gf4", "k_moe_route3", "k_moe_comb_h", "k_attn_h", "k_kvcopy", "k_mix_b_1_1", "k_mix_b_2_1", "k_mix_b_3_1", "k_mix_b_4_1", "k_mix_b_5_1", "k_mix_b_6_1", "k_mix_b_1_3", "k_mix_b_2_3", "k_mix_b_3_3", "k_mix_b_4_3", "k_mix_b_5_3", "k_mix_b_6_3", "k_mix_b_1_4", "k_mix_b_2_4", "k_mix_b_3_4", "k_mix_b_4_4", "k_mix_b_5_4", "k_mix_b_6_4", "k_mix_b_id",
     "k_touch",
+    "k_moe_route4", "k_moe_dir_gu1", "k_moe_dir_gu2", "k_moe_dir_dn1", "k_moe_dir_dn2",
+    "k_wo_post_sg8", "k_wo_post_sg4", "k_moe_comb_post_b",
+    "k_attn_paged_b", "k_attn_combine_b", "k_kvprep_dec_b", "k_attn_prefix_h", "k_attn_suffix_paged_b",
+    "k_lmhead_argmax_sg8", "k_lmhead_argmax_sg4", "k_argmax_batch",
+    "k_lmhead_slice_sg8", "k_lmhead_slice_sg4", "k_topk_merge", "k_sample_topk",
+    "k_copy_prefix_kv", "k_copy_kv_to_paged", "k_broadcast_cs", "k_zero_cs_slots",
+    "k_packed_postconv_b", "k_packed_state_upd", "k_packed_kvprep_b", "k_packed_attn_h", "k_out_mix_gather",
+    "k_plora_merge_pb", "k_plora_lin_a", "k_plora_lin_b", "k_postconv_dec",
+    "k_plora_moe_a_dec", "k_moe_gu_lora", "k_moe_down_lora",
+    "k_plora_moe_a13_pf", "k_moe_sg8_lora", "k_moe_sg4_lora", "k_plora_moe_a2_pf", "k_plora_moe_b2_pf",
+    "k_moe_route6", "k_moe_dir_gu_dyn4", "k_moe_dir_gu_dyn8", "k_moe_dir_dn_dyn4", "k_moe_dir_dn_dyn8",
+    "k_moe_sg2", "k_moe_sg1",
+    "k_wo_post_sg8_hcs", "k_wo_post_sg4_hcs", "k_moe_comb_post_hcs", "k_zero_cs_hcs", "k_broadcast_cs_hcs",
+    "k_attn_paged_b_hcs", "k_postconv_hcs_chunk", "k_state_upd_hcs",
+    "k_kvprep_wht_write", "k_fp16_to_wht_compress", "k_page_summarize_kv",
+    "k_score_pages_quest", "k_attn_sparse_wht_b", "k_attn_wht_chunk",
+    "k_compute_k_dc_mean", "k_page_summarize_wht2", "k_score_pages_wht2",
+    "k_swa_compress_outer", "k_swa_load_from_engine", "k_attn_swa_tiered_b",
+    "k_attn_master_diff_b", "k_kv_diff_extract", "k_kvcomm_apply_offset",
 ];
 
 // ----------------------------------------------------------------------------- kernel arg structs (mirror kernels.metal)
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct EmbedArgs { emb_lo: u32, emb_hi: u32, row_bytes: u32, norm_off: u32, out0: u32, out1: u32, tok_index: u32, eps: f32 }
+pub(crate) struct EmbedArgs { pub emb_lo: u32, pub emb_hi: u32, pub row_bytes: u32, pub norm_off: u32, pub out0: u32, pub out1: u32, pub tok_index: u32, pub eps: f32 }
 
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct MixJob { n_s: u32, n_q: u32, s_off: [u32; 6], q_off: i32, out_off: [u32; 4], norm_off: [i32; 4], eps: f32, tstride: u32, ncopy: [[i32; 3]; 4], ntok: u32,
-                 hcopy: [[i32; 3]; 4], hout: [i32; 4], hstride: u32, nof32: u32 }
+pub(crate) struct MixJob { pub n_s: u32, pub n_q: u32, pub s_off: [u32; 6], pub q_off: i32, pub out_off: [u32; 4], pub norm_off: [i32; 4], pub eps: f32, pub tstride: u32, pub ncopy: [[i32; 3]; 4], pub ntok: u32,
+                 pub hcopy: [[i32; 3]; 4], pub hout: [i32; 4], pub hstride: u32, pub nof32: u32 }
 
 #[repr(C)] #[derive(Clone, Copy, Default)]
 struct Seg {
@@ -123,7 +142,7 @@ struct AttnArgs {
 struct DevCopyArgs { src: u32, dst: u32, n: u32, pad: u32 }
 /// dev (key eviction experiments): the far keys of the full-attention slots replaced by a selection (`rows` per group,
 /// the last one a summary of the evicted keys with score bias `lastbias`); keys from position `r0` on are untouched
-pub struct Prune { bag: Buf, rows: usize, r0: usize, lastbias: f32, use_sum: bool }
+pub struct Prune { pub(crate) bag: Buf, pub(crate) rows: usize, pub(crate) r0: usize, pub(crate) lastbias: f32, pub(crate) use_sum: bool }
 #[repr(C)] #[derive(Clone, Copy, Default)]
 struct CombineArgs { part_off: u32, nsplit: u32, gate_off: u32, out_off: u32 }
 
@@ -142,24 +161,24 @@ struct MoeArgs {
 #[repr(C)] #[derive(Clone, Copy, Default)]
 struct GSeg { w_lo: u32, w_hi: u32, row_bytes: u32, wtype: u32, nrows: u32, k: u32, tile_start: u32, in_off: u32, out_off: u32, ldo: u32, wsrc: u32, in2: u32 }
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct ToHalfArgs { src_off: u32, dst_off: u32, k: u32, rows: u32, perm_off: u32, gather: u32, src_stride: u32, dst_stride: u32 }
+pub(crate) struct ToHalfArgs { pub src_off: u32, pub dst_off: u32, pub k: u32, pub rows: u32, pub perm_off: u32, pub gather: u32, pub src_stride: u32, pub dst_stride: u32 }
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct HSeg { w_lo: u32, w_hi: u32, row_bytes: u32, wtype: u32, nrows: u32, k: u32, tile_start: u32, xh_off: u32, out_off: u32, ldo: u32, wsrc: u32, hout: u32 }
+pub(crate) struct HSeg { pub w_lo: u32, pub w_hi: u32, pub row_bytes: u32, pub wtype: u32, pub nrows: u32, pub k: u32, pub tile_start: u32, pub xh_off: u32, pub out_off: u32, pub ldo: u32, pub wsrc: u32, pub hout: u32 }
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct GemmHArgs { nseg: u32, t: u32, pad: [u32; 2], seg: [HSeg; 10] }
+pub(crate) struct GemmHArgs { pub nseg: u32, pub t: u32, pub pad: [u32; 2], pub seg: [HSeg; 10] }
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct MoeGemmHArgs {
-    w_lo: u32, w_hi: u32, expert_bytes: u32, row_bytes: u32, wtype: u32, nrows: u32, k: u32, xh_off: u32,
-    tiles_off: u32, ntiles_off: u32, out_off: u32, ldo: u32, situ: u32, aw_off: u32, beta: f32, lbeta: f32,
+pub(crate) struct MoeGemmHArgs {
+    pub w_lo: u32, pub w_hi: u32, pub expert_bytes: u32, pub row_bytes: u32, pub wtype: u32, pub nrows: u32, pub k: u32, pub xh_off: u32,
+    pub tiles_off: u32, pub ntiles_off: u32, pub out_off: u32, pub ldo: u32, pub situ: u32, pub aw_off: u32, pub beta: f32, pub lbeta: f32,
 }
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct CtrlBJob { u_off: u32, m_off: u32, g_off: u32, f_off: u32, out_off: u32, norm_w: u32, h_off: i32, nof32: u32 }
+pub(crate) struct CtrlBJob { pub u_off: u32, pub m_off: u32, pub g_off: u32, pub f_off: u32, pub out_off: u32, pub norm_w: u32, pub h_off: i32, pub nof32: u32 }
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct CtrlGfJob { gain_w: u32, forget_w: u32, gh_off: u32, u_off: u32, m_off: u32, raw_off: u32, pad: [u32; 2] }
+pub(crate) struct CtrlGfJob { pub gain_w: u32, pub forget_w: u32, pub gh_off: u32, pub u_off: u32, pub m_off: u32, pub raw_off: u32, pub pad: [u32; 2] }
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct CtrlGfArgs { t: u32, njobs: u32, pad: [u32; 2], job: [CtrlGfJob; 4] }
+pub(crate) struct CtrlGfArgs { pub t: u32, pub njobs: u32, pub pad: [u32; 2], pub job: [CtrlGfJob; 4] }
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct CtrlBArgs { n: u32, pad: [u32; 3], job: [CtrlBJob; 4] }
+pub(crate) struct CtrlBArgs { pub n: u32, pub pad: [u32; 3], pub job: [CtrlBJob; 4] }
 #[repr(C)] #[derive(Clone, Copy, Default)]
 struct GemmArgs { nseg: u32, t: u32, pad: [u32; 2], seg: [GSeg; 10] }
 #[repr(C)] #[derive(Clone, Copy, Default)]
@@ -169,7 +188,7 @@ struct MoeGemmArgs {
     beta: f32, lbeta: f32, pad2: [f32; 2],
 }
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct TopkBArgs { logits_off: u32, bias_off: u32, sel_off: u32, t: u32, wscale: f32, pad: [u32; 3] }
+pub(crate) struct TopkBArgs { pub logits_off: u32, pub bias_off: u32, pub sel_off: u32, pub t: u32, pub wscale: f32, pub pad: [u32; 3] }
 #[repr(C)] #[derive(Clone, Copy, Default)]
 struct RouteArgs { sel_off: u32, t: u32, perm_off: u32, inv_off: u32, tiles_off: u32, ntiles_off: u32, tile: u32, pad: u32 }
 #[repr(C)] #[derive(Clone, Copy, Default)]
@@ -200,7 +219,7 @@ pub struct BArena {
     cat_u: [u32; 4], cat_m: [u32; 4], gain_o: [u32; 4], forget_o: [u32; 4],
     xh: [u32; 3], agh: u32, xgh: u32, acth: u32, cath: [u32; 4], gh: [u32; 4],
     tl: [u32; NTC], ind: u32, aw: u32, fh: u32, sk: u32, sv: u32,
-    wo_y: u32, ffn_y: u32, rlog: u32, sel: u32, perm: u32, inv: u32, tiles: u32, ntiles: u32, act: u32, yd: u32, end: u32,
+    wo_y: u32, ffn_y: u32, rlog: u32, sel: u32, perm: u32, inv: u32, tiles: u32, ntiles: u32, act: u32, yd: u32, plora_tmp: u32, end: u32,
     /// tokens this layout was sized for (0: no batch arena allocated)
     cap: usize,
 }
@@ -236,6 +255,7 @@ impl BArena {
         b.sk = take(NKV * (EXT + t + 2 * KGUARD) * HD * kvb / 4); b.sv = take(NKV * (EXT + t + 2 * KGUARD) * HD * kvb / 4);
         b.perm = take(t * TOPK); b.inv = take(t * TOPK); b.tiles = take(fb((t * TOPK / 32 + NEXP + 1) * 4)); b.ntiles = take(64);
         b.act = take(fb(t * TOPK * FF)); b.yd = take(hf(t * TOPK * E));
+        b.plora_tmp = take(t * 256);
         b.end = o;
         b
     }
@@ -263,6 +283,8 @@ pub struct Layer {
     pub ffn_res_query: u32, pub ffn_norm: u32,
     pub q_clip: u32, pub rel_clip: u32, pub rel_bias: u32, pub k_conv: u32, pub v_conv: u32,
     pub attn_post_conv: u32, pub ffn_post_conv: u32,
+    /// transposed SoA conv weights [4][dim] in PB for coalesced float4 batched decode
+    pub k_conv_t: u32, pub v_conv_t: u32, pub attn_post_conv_t: u32, pub ffn_post_conv_t: u32,
     pub router: u32, pub exp_bias: u32,
     pub gu: QW, pub dn: QW,
 }
@@ -278,6 +300,27 @@ impl Pb {
         let t = g.tensor(name);
         assert_eq!(t.ty, T_F32, "{name}");
         self.data.extend_from_slice(g.bytes(t));
+        off
+    }
+    /// Transpose [dim][4] f32 conv weights into [4][dim] SoA for coalesced float4 loads.
+    fn f32_conv_t(&mut self, g: &Gguf, name: &str) -> u32 {
+        self.align();
+        let off = self.data.len() as u32;
+        let t = g.tensor(name);
+        assert_eq!(t.ty, T_F32, "{name}");
+        let raw = g.bytes(t);
+        let n_f32 = raw.len() / 4;
+        assert!(n_f32 % 4 == 0);
+        let dim = n_f32 / 4;
+        let mut out = vec![0u8; raw.len()];
+        for c in 0..dim {
+            for k in 0..4 {
+                let s = (c * 4 + k) * 4;
+                let d = (k * dim + c) * 4;
+                out[d..d + 4].copy_from_slice(&raw[s..s + 4]);
+            }
+        }
+        self.data.extend_from_slice(&out);
         off
     }
     /// F32 -> BF16 (round to nearest even). Lossless for this model's bf16-origin matrices.
@@ -300,11 +343,11 @@ impl Pb {
 pub struct Arena {
     pub q: u32, pub gate: u32, pub k: u32, pub v: u32, pub rel: u32, pub sink: u32, pub kdyn: u32, pub vdyn: u32,
     pub attn_g: u32, pub inp: [u32; 3], pub msg: [u32; 4], pub cin: [u32; 3], pub ctrlg: [u32; 4], pub ssp: [u32; 4],
-    pub cat: [u32; 4], pub fin: u32, pub finc: u32, pub fout: u32, pub rlog: u32, pub sel: u32, pub sel_log: u32, pub act: u32, pub part: u32, pub logits: u32, pub amax: u32, pub total: u32,
+    pub cat: [u32; 4], pub fin: u32, pub finc: u32, pub fout: u32, pub rlog: u32, pub sel: u32, pub sel_log: u32, pub act: u32, pub part: u32, pub logits: u32, pub amax: u32, pub plora_tmp: u32, pub plora_wo: u32, pub total: u32,
 }
 const N_VEC: usize = 16;
 /// hidden-state vectors of the batch arena: at most 4 block states + the current one + 3 pinned + the one being written
-const B_NVEC: usize = 10;
+pub(crate) const B_NVEC: usize = 10;
 
 impl Arena {
     fn new(max_split: usize, vocab_pad: usize) -> Arena {
@@ -324,15 +367,17 @@ impl Arena {
         let part = take(NH * max_split * (HD + 2));
         let logits = take(vocab_pad);
         let amax = take(2 * 256);
-        Arena { q, gate, k, v, rel, sink, kdyn, vdyn, attn_g, inp, msg, cin, ctrlg, ssp, cat, fin, finc, fout, rlog, sel, sel_log, act, part, logits, amax, total: o }
+        let plora_tmp = take(512);
+        let plora_wo = take(E);
+        Arena { q, gate, k, v, rel, sink, kdyn, vdyn, attn_g, inp, msg, cin, ctrlg, ssp, cat, fin, finc, fout, rlog, sel, sel_log, act, part, logits, amax, plora_tmp, plora_wo, total: o }
     }
     pub fn vec(i: usize) -> u32 { (i * E) as u32 }
 }
 
 // round-robin vector allocator that never hands out a live vector
-struct VecAlloc { next: usize, n: usize }
+pub(crate) struct VecAlloc { pub next: usize, pub n: usize }
 impl VecAlloc {
-    fn alloc(&mut self, live: &[usize]) -> usize {
+    pub(crate) fn alloc(&mut self, live: &[usize]) -> usize {
         for _ in 0..self.n {
             let c = self.next;
             self.next = (self.next + 1) % self.n;
@@ -345,33 +390,34 @@ impl VecAlloc {
 pub struct Engine {
     pub g: Gguf,
     pub gpu: Gpu,
-    w: Buf, pub pb: Buf, cs: Buf, pub toks: Buf, ctr: Buf,
+    pub(crate) w: Buf, pub pb: Buf, pub cs: Buf, pub toks: Buf, ctr: Buf,
     /// activations: the small decode arena, followed by the batch (prefill) arena while a prefill needs one
     act: std::cell::RefCell<Buf>,
     /// K/V cache (fp16). Sliding-window layers keep exactly their window (a ring of EXT keys per slot), full-attention
     /// layers every key. Both buffers are sized to the context and grow with it.
-    kv_swa: std::cell::RefCell<Buf>, kv_full: std::cell::RefCell<Buf>, swa_cap: std::cell::Cell<usize>, full_cap: std::cell::Cell<usize>,
+    pub kv_swa: std::cell::RefCell<Buf>, pub kv_full: std::cell::RefCell<Buf>, pub swa_cap: std::cell::Cell<usize>, pub full_cap: std::cell::Cell<usize>,
     /// per slot: (is sliding-window, index among the slots of its kind)
-    slot_kind: Vec<(bool, usize)>,
+    pub slot_kind: Vec<(bool, usize)>,
     tier: Option<Tier>,
     /// dev: capture of the full-attention layers' prepared queries and sinks during a prefill (per slot: n x 24 x 128 fp16, n x 24 f32)
-    qcap: RefCell<Option<(Buf, usize)>>,
+    pub(crate) qcap: RefCell<Option<(Buf, usize)>>,
     pub prune: RefCell<Option<Prune>>,
+    pub persona: RefCell<Option<crate::persona::PersonaHook>>,
     pub layers: Vec<Layer>,
-    loops: Vec<LoopW>,
-    tok_embd: QW, tok_norm: u32, output: QW, output_norm: u32, output_res_query: u32,
+    pub(crate) loops: Vec<LoopW>,
+    pub(crate) tok_embd: QW, pub(crate) tok_norm: u32, pub(crate) output: QW, pub(crate) output_norm: u32, pub(crate) output_res_query: u32,
     pub ar: Arena,
-    pub kv8: bool, kvb: usize, ba: std::cell::Cell<BArena>, pub chunk: usize, pub tensor: bool, pub hgemm: bool, sep_comb: bool, sep_topk: bool,
+    pub kv8: bool, pub(crate) kvb: usize, ba: std::cell::Cell<BArena>, pub chunk: usize, pub tensor: bool, pub hgemm: bool, sep_comb: bool, sep_topk: bool,
     /// last-layer tail mode of the prefill (dev tools switch it off to profile full layers)
     pub tail: std::cell::Cell<bool>,
     pub skip: std::cell::Cell<u32>,
     pub stop: std::cell::Cell<usize>, done: std::cell::Cell<usize>, pub last_out: std::cell::Cell<usize>, pub last_mid: std::cell::Cell<usize>,
     pub max_ctx: usize,
     pub n_vocab: usize,
-    eps: f32, log_alpha: f32, log_floor: f32, situ_beta: f32, situ_lbeta: f32, wscale: f32, pub softcap: f32,
+    pub(crate) eps: f32, pub(crate) log_alpha: f32, pub(crate) log_floor: f32, pub(crate) situ_beta: f32, pub(crate) situ_lbeta: f32, pub(crate) wscale: f32, pub softcap: f32,
 }
 
-fn slot_of(pass: usize, ip: usize) -> usize {
+pub(crate) fn slot_of(pass: usize, ip: usize) -> usize {
     if pass == 0 || !(LOOP_START..LOOP_END).contains(&ip) { ip } else { N_PHYS + (pass - 1) * (LOOP_END - LOOP_START) + (ip - LOOP_START) }
 }
 
@@ -425,6 +471,10 @@ impl Engine {
                 v_conv: pb.f32(&g, &n("attn_v_conv.weight")),
                 attn_post_conv: pb.f32(&g, &n("attn_post_conv.weight")),
                 ffn_post_conv: pb.f32(&g, &n("ffn_post_conv.weight")),
+                k_conv_t: pb.f32_conv_t(&g, &n("attn_k_conv.weight")),
+                v_conv_t: pb.f32_conv_t(&g, &n("attn_v_conv.weight")),
+                attn_post_conv_t: pb.f32_conv_t(&g, &n("attn_post_conv.weight")),
+                ffn_post_conv_t: pb.f32_conv_t(&g, &n("ffn_post_conv.weight")),
                 router: pb.bf16(&g, &n("ffn_gate_inp.weight")),
                 exp_bias: pb.f32(&g, &n("exp_probs_b.bias")),
                 gu: qw(&g, &n("ffn_gate_up_exps.weight")),
@@ -459,7 +509,7 @@ impl Engine {
         let n_vocab = g.u(&a("vocab_size_unpadded")) as usize;
         let n_vocab_pad = output.rows as usize;
 
-        let src = format!("{}{}\n{}\n{}", if kv8 { "#define KV8 1\n" } else { "" }, include_str!("kernels.metal"), include_str!("prefill.metal"), include_str!("bench_kernels.metal"));
+        let src = format!("{}{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}", if kv8 { "#define KV8 1\n" } else { "" }, include_str!("kernels.metal"), include_str!("prefill.metal"), include_str!("batch.metal"), include_str!("batch_opt.metal"), include_str!("kv_share.metal"), include_str!("bench_kernels.metal"), include_str!("multistream.metal"), include_str!("persona.metal"));
         let kvb = if kv8 { 1 } else { 2 };
         let gpu = Gpu::new(&src, KERNELS);
         let w = gpu.buffer_nocopy(g.map, g.map_len);
@@ -481,7 +531,7 @@ impl Engine {
             let phys = if s < N_PHYS { s } else { LOOP_START + (s - N_PHYS) % (LOOP_END - LOOP_START) };
             if layers[phys].swa { slot_kind.push((true, n_swa)); n_swa += 1; } else { slot_kind.push((false, n_full)); n_full += 1; }
         }
-        assert!(n_full * 2 * NKV * max_ctx * HD < u32::MAX as usize, "KV cache too large for 32-bit offsets");
+        // Legacy single-stream dense KV uses 32-bit offsets (enforced in reserve()); 64-bit Kv256kPool supports 256K-1M+!
         let cap0 = KV_CAP0.min(max_ctx);
         let kv_swa = gpu.buffer(n_swa * 2 * NKV * cap0 * HD * kvb);
         let kv_full = gpu.buffer(n_full * 2 * NKV * cap0 * HD * kvb);
@@ -512,7 +562,7 @@ impl Engine {
             wscale: g.f(&a("expert_weights_scale")) as f32,
             softcap: g.f(&a("final_logit_softcapping")) as f32,
             g, gpu, w, pb: pbuf, act: std::cell::RefCell::new(act), kv_swa: std::cell::RefCell::new(kv_swa), kv_full: std::cell::RefCell::new(kv_full),
-            swa_cap: std::cell::Cell::new(cap0), full_cap: std::cell::Cell::new(cap0), slot_kind, tier, qcap: RefCell::new(None), prune: RefCell::new(None), cs, toks, ctr, layers, loops, tok_embd, tok_norm, output, output_norm, output_res_query,
+            swa_cap: std::cell::Cell::new(cap0), full_cap: std::cell::Cell::new(cap0), slot_kind, tier, qcap: RefCell::new(None), prune: RefCell::new(None), persona: RefCell::new(None), cs, toks, ctr, layers, loops, tok_embd, tok_norm, output, output_norm, output_res_query,
             ar, kv8, kvb, ba: Default::default(), chunk, tensor: std::env::var("INK_NO_TENSOR").is_err(),
             hgemm: std::env::var("INK_NO_HGEMM").is_err() && std::env::var("INK_NO_TENSOR").is_err(),
             sep_comb: std::env::var("INK_FUSE_COMB").is_err(), sep_topk: std::env::var("INK_SEP_TOPK").is_ok(),
@@ -534,7 +584,7 @@ impl Engine {
     }
 
     /// (k_base, v_base, cap) of a slot's K/V inside its buffer (offsets in cache elements: fp16, or bytes with --kv8)
-    fn kv_slot(&self, slot: usize) -> (u32, u32, u32) {
+    pub fn kv_slot(&self, slot: usize) -> (u32, u32, u32) {
         let (swa, i) = self.slot_kind[slot];
         let cap = if swa { self.swa_cap.get() } else { self.full_cap.get() };
         ((i * 2 * NKV * cap * HD) as u32, ((i * 2 + 1) * NKV * cap * HD) as u32, cap as u32)
@@ -574,8 +624,10 @@ impl Engine {
             capc.set(cap);
         };
         let n_swa = self.slot_kind.iter().filter(|k| k.0).count();
+        let n_full = N_SLOT - n_swa;
+        assert!(n_full * 2 * NKV * n * HD < u32::MAX as usize, "single-stream dense KV cache ({n} tok) exceeds 32-bit offsets; use 64-bit Kv256kPool for 256K+");
         grow(&self.kv_swa, &self.swa_cap, n.min(EXT), EXT, n_swa);
-        grow(&self.kv_full, &self.full_cap, n, self.max_ctx, N_SLOT - n_swa);
+        grow(&self.kv_full, &self.full_cap, n, self.max_ctx, n_full);
     }
     /// Allocate (or enlarge) the batch arena for a prefill of `t` tokens. Nothing may be in flight on the GPU.
     pub fn ensure_batch(&self, t: usize) {
@@ -603,6 +655,15 @@ impl Engine {
         e.barrier();
         self.bind_kv(&e, false); e.dispatch((1, 1, 1), 32);
         e.end(); cb.commit(); cb.waitUntilCompleted();
+    }
+    /// Release the engine's own K/V buffers back to minimum size (e.g. after copying prefix KV into BatchEngine). GPU idle.
+    pub fn shrink_kv(&self) {
+        let n_swa = self.slot_kind.iter().filter(|k| k.0).count();
+        let cap0 = KV_CAP0.min(self.max_ctx);
+        *self.kv_swa.borrow_mut() = self.gpu.buffer(n_swa * 2 * NKV * cap0 * HD * self.kvb);
+        *self.kv_full.borrow_mut() = self.gpu.buffer((N_SLOT - n_swa) * 2 * NKV * cap0 * HD * self.kvb);
+        self.swa_cap.set(cap0);
+        self.full_cap.set(cap0);
     }
     /// Give the batch arena back (the decode arena and the last logits stay). Nothing may be in flight on the GPU.
     pub fn release_batch(&self) {
@@ -1540,8 +1601,151 @@ impl Engine {
         best
     }
 
+    /// dev: probe GPU memory limits and small/medium-batch MoE kernel efficiency (GB/s & TFLOPs)
+    pub fn kbench_batch_probe(&self) {
+        use objc2_metal::MTLDevice;
+        println!("GPU: {} | maxWorkingSet: {:.2} GiB | maxBufferLength: {:.2} GiB",
+                 self.gpu.dev.name(),
+                 self.gpu.dev.recommendedMaxWorkingSetSize() as f64 / (1u64 << 30) as f64,
+                 self.gpu.dev.maxBufferLength() as f64 / (1u64 << 30) as f64);
+        self.ensure_batch(512);
+        let b = self.ba.get();
+        let h = self.act.borrow().contents().as_ptr() as *mut u16;
+        unsafe { for i in 0..512 * E { *h.add(b.xh[0] as usize * 2 + i) = 0x3800 + ((i * 7919) % 512) as u16; } }
+        #[repr(C)] #[derive(Clone, Copy)]
+        struct BatchProbeArgs { w_lo: u32, w_hi: u32, expert_bytes: u32, row_bytes: u32, wtype: u32, nrows: u32, k: u32, xh_off: u32, out_off: u32, cnt: u32, nexp: u32, pad: u32 }
+        let run_gu = |name: &str, cnt: usize, bm: usize, tg: usize| -> (f64, f64) {
+            let mut best = f64::MAX;
+            let nexp = 64usize;
+            for rep in 0..3 {
+                let cb = self.gpu.cmd(); let e = Enc::new(&cb); self.bind(&e);
+                e.pso(&self.gpu.pso(name));
+                for l in 0..6 {
+                    let w = &self.layers[l].gu;
+                    let a = BatchProbeArgs { w_lo: w.off as u32, w_hi: (w.off >> 32) as u32, expert_bytes: w.expert_bytes as u32, row_bytes: w.row_bytes,
+                                             wtype: w.ty, nrows: w.rows, k: w.k, xh_off: b.xh[0], out_off: b.vec(0), cnt: cnt as u32, nexp: nexp as u32, pad: 0 };
+                    e.bytes(&a, 5);
+                    e.dispatch((nexp, w.rows as usize / bm, 1), tg);
+                    e.barrier();
+                }
+                e.end(); cb.commit(); cb.waitUntilCompleted();
+                if rep > 0 { best = best.min(cb.GPUEndTime() - cb.GPUStartTime()); }
+            }
+            let bytes = 6.0 * nexp as f64 * self.layers[0].gu.expert_bytes as f64;
+            let flops = 6.0 * nexp as f64 * cnt as f64 * 2.0 * (2 * FF) as f64 * E as f64;
+            (bytes / best / 1e9, flops / best / 1e12)
+        };
+        println!("\n--- MoE gate_up (Q4_K, K=2304, N=2304) ---");
+        for (name, cnt, bm, tg) in [
+            ("kb_dir_q4k_1", 1, 8, 128), ("kb_tc_1_32_8", 1, 32, 32), ("kb_tc_1_32_16", 1, 32, 32), ("kb_tc_4_64_16", 1, 64, 128),
+            ("kb_dir_q4k_2", 2, 8, 128), ("kb_tc_1_32_8", 2, 32, 32), ("kb_tc_4_64_16", 2, 64, 128),
+            ("kb_dir_q4k_4", 4, 8, 128), ("kb_tc_1_32_8", 4, 32, 32), ("kb_tc_1_32_16", 4, 32, 32), ("kb_tc_4_64_8", 4, 64, 128), ("kb_tc_4_64_16", 4, 64, 128),
+            ("kb_dir_q4k_8", 8, 8, 128), ("kb_tc_1_32_8", 8, 32, 32), ("kb_tc_1_32_16", 8, 32, 32), ("kb_tc_1_64_16", 8, 64, 32), ("kb_tc_4_64_8", 8, 64, 128), ("kb_tc_4_64_16", 8, 64, 128),
+            ("kb_tc_1_32_16", 16, 32, 32), ("kb_tc_1_64_16", 16, 64, 32), ("kb_tc_2_32_8", 16, 32, 64), ("kb_tc_2_64_16", 16, 64, 64), ("kb_tc_4_64_16", 16, 64, 128),
+            ("kb_tc_2_64_16", 32, 64, 64), ("kb_tc_4_64_16", 32, 64, 128),
+            ("kb_tc_4_64_16", 64, 64, 128), ("kb_tc_8_64_16", 128, 64, 256),
+        ] {
+            let (gb, tf) = run_gu(name, cnt, bm, tg);
+            println!("  cnt={cnt:3} {name:>14}: {:6.1} GB/s  {:5.2} TFLOPs", gb, tf);
+        }
+        let run_dn = |name: &str, cnt: usize, bm: usize, tg: usize| -> (f64, f64) {
+            let mut best = f64::MAX;
+            let nexp = 64usize;
+            for rep in 0..3 {
+                let cb = self.gpu.cmd(); let e = Enc::new(&cb); self.bind(&e);
+                e.pso(&self.gpu.pso(name));
+                for l in 0..6 {
+                    let w = &self.layers[l].dn;
+                    let a = BatchProbeArgs { w_lo: w.off as u32, w_hi: (w.off >> 32) as u32, expert_bytes: w.expert_bytes as u32, row_bytes: w.row_bytes,
+                                             wtype: w.ty, nrows: w.rows, k: w.k, xh_off: b.xh[0], out_off: b.vec(0), cnt: cnt as u32, nexp: nexp as u32, pad: 0 };
+                    e.bytes(&a, 5);
+                    e.dispatch((nexp, w.rows as usize / bm, 1), tg);
+                    e.barrier();
+                }
+                e.end(); cb.commit(); cb.waitUntilCompleted();
+                if rep > 0 { best = best.min(cb.GPUEndTime() - cb.GPUStartTime()); }
+            }
+            let bytes: f64 = (0..6).map(|l| nexp as f64 * self.layers[l].dn.expert_bytes as f64).sum();
+            let flops = 6.0 * nexp as f64 * cnt as f64 * 2.0 * E as f64 * FF as f64;
+            (bytes / best / 1e9, flops / best / 1e12)
+        };
+        println!("\n--- MoE down (Q8_0/Q5_0, K=1152, N=2304) ---");
+        for (name, cnt, bm, tg) in [
+            ("kb_dir_dn_1", 1, 8, 128), ("kb_tc_1_32_8", 1, 32, 32), ("kb_tc_4_64_16", 1, 64, 128),
+            ("kb_dir_dn_2", 2, 8, 128), ("kb_tc_1_32_8", 2, 32, 32), ("kb_tc_4_64_16", 2, 64, 128),
+            ("kb_dir_dn_4", 4, 8, 128), ("kb_tc_1_32_8", 4, 32, 32), ("kb_tc_4_64_16", 4, 64, 128),
+            ("kb_dir_dn_8", 8, 8, 128), ("kb_tc_1_32_8", 8, 32, 32), ("kb_tc_1_32_16", 8, 32, 32), ("kb_tc_4_64_8", 8, 64, 128), ("kb_tc_4_64_16", 8, 64, 128),
+            ("kb_tc_1_32_16", 16, 32, 32), ("kb_tc_1_64_16", 16, 64, 32), ("kb_tc_2_64_16", 16, 64, 64), ("kb_tc_4_64_16", 16, 64, 128),
+            ("kb_tc_2_64_16", 32, 64, 64), ("kb_tc_4_64_16", 32, 64, 128),
+            ("kb_tc_4_64_16", 64, 64, 128), ("kb_tc_8_64_16", 128, 64, 256),
+        ] {
+            let (gb, tf) = run_dn(name, cnt, bm, tg);
+            println!("  cnt={cnt:3} {name:>14}: {:6.1} GB/s  {:5.2} TFLOPs", gb, tf);
+        }
+        println!("\n--- MoE gate_up zero-spill direct (Q4_K) vs TC ---");
+        for &cnt in &[1usize, 2, 4, 6, 8, 12, 16] {
+            let (g4, t4) = run_gu("kb_dir2_q4k_4", cnt, 4, 128);
+            let (g8, t8) = run_gu("kb_dir2_q4k_8", cnt, 8, 256);
+            let (gt, tt) = run_gu("kb_tc_4_64_16", cnt, 64, 128);
+            println!("  cnt={cnt:2}  dir4: {g4:5.1} GB/s ({t4:4.2} TF) | dir8: {g8:5.1} GB/s ({t8:4.2} TF) | tc4_64_16: {gt:5.1} GB/s ({tt:4.2} TF)");
+        }
+        println!("\n--- MoE down zero-spill direct (Q8_0/Q5_0) vs TC ---");
+        for &cnt in &[1usize, 2, 4, 6, 8, 12, 16] {
+            let (g4, t4) = run_dn("kb_dir2_dn_4", cnt, 4, 128);
+            let (g8, t8) = run_dn("kb_dir2_dn_8", cnt, 8, 256);
+            let (gt, tt) = run_dn("kb_tc_4_64_16", cnt, 64, 128);
+            println!("  cnt={cnt:2}  dir4: {g4:5.1} GB/s ({t4:4.2} TF) | dir8: {g8:5.1} GB/s ({t8:4.2} TF) | tc4_64_16: {gt:5.1} GB/s ({tt:4.2} TF)");
+        }
+        println!("\n--- lm_head (Q6_K, 201024 x 2304, vectorized deq16) ---");
+        let w = &self.output;
+        let logits_buf = self.gpu.buffer(512 * w.rows as usize * 2 + 512 * E * 2 + 4096);
+        for &bt in &[16usize, 64, 128, 256, 512] {
+            let mut best = f64::MAX;
+            for rep in 0..4 {
+                let cb = self.gpu.cmd(); let e = Enc::new(&cb); self.bind(&e);
+                e.buf(&logits_buf, 0, 2);
+                let xbytes = (bt * E * 2).div_ceil(256) * 256;
+                let mut sg = Self::hseg(w, 0, (xbytes / 4) as u32);
+                sg.hout = 1;
+                let mut ga = GemmHArgs { nseg: 1, t: bt as u32, ..Default::default() };
+                ga.seg[0] = sg;
+                let tiles = w.rows.div_ceil(64) as usize;
+                if bt > 64 { e.pso(&self.gpu.pso("k_gemm_sg8")); e.bytes(&ga, 5); e.dispatch((bt.div_ceil(128), tiles, 1), 256); }
+                else { e.pso(&self.gpu.pso("k_gemm_sg4")); e.bytes(&ga, 5); e.dispatch((1, tiles, 1), 128); }
+                e.end(); cb.commit(); cb.waitUntilCompleted();
+                if rep > 0 { best = best.min(cb.GPUEndTime() - cb.GPUStartTime()); }
+            }
+            let gb = (w.rows as f64 * w.row_bytes as f64) / best / 1e9;
+            let tf = (2.0 * bt as f64 * w.rows as f64 * w.k as f64) / best / 1e12;
+            println!("  B={bt:3}: {:6.2} ms  {:6.1} GB/s  {:5.2} TFLOPs", best * 1e3, gb, tf);
+        }
+    }
+
+    pub fn attach_persona(&self, hook: crate::persona::PersonaHook) {
+        *self.persona.borrow_mut() = Some(hook);
+    }
+    pub fn set_persona_blend(&self, mix: f32, strength: f32, parts: crate::persona::PersonaParts) {
+        if let Some(p) = self.persona.borrow_mut().as_mut() {
+            p.set_blend(self, mix, strength, parts);
+        }
+    }
+    pub fn persona_blend_key(&self) -> (u32, u32, u8) {
+        self.persona.borrow().as_ref().map_or((0, 0, 0), |p| p.blend_key())
+    }
+    pub(crate) fn act_buf(&self) -> std::cell::Ref<'_, Buf> {
+        self.act.borrow()
+    }
+
     fn bind(&self, e: &Enc) {
-        e.buf(&self.w, 0, 0); e.buf(&self.pb, 0, 1); e.buf(&self.act.borrow(), 0, 2); e.buf(&self.kv_swa.borrow(), 0, 3); e.buf(&self.cs, 0, 4); e.buf(&self.toks, 0, 6);
+        e.buf(&self.w, 0, 0);
+        if let Some(p) = self.persona.borrow().as_ref() {
+            e.buf(&p.pb_live, 0, 1);
+            e.buf(&p.ad0.ad_buf, 0, 10);
+            e.buf(&p.ad1.ad_buf, 0, 11);
+        } else {
+            e.buf(&self.pb, 0, 1);
+        }
+        e.buf(&self.act.borrow(), 0, 2); e.buf(&self.kv_swa.borrow(), 0, 3); e.buf(&self.cs, 0, 4); e.buf(&self.toks, 0, 6);
         e.buf(&self.ctr, 0, 7);
     }
 
@@ -1582,7 +1786,7 @@ impl Engine {
                 let name = if j.q_off < 0 { "k_mix_b_id".to_string() } else { format!("k_mix_b_{}_{}", j.n_s, j.n_q) };
                 e.pso(&self.gpu.pso(&name));
                 e.bytes(&j, 5);
-                e.dispatch((t.div_ceil(4), 1, 1), 128);
+                if t <= 64 { e.dispatch((t, 1, 1), 32); } else { e.dispatch((t.div_ceil(4), 1, 1), 128); }
             }
             e.barrier();
             return;
@@ -1596,7 +1800,7 @@ impl Engine {
         let offs: Vec<u32> = states.iter().map(|&s| Arena::vec(s)).collect();
         self.mix_job_off(&offs, q_off, n_q, outs, norms, 0)
     }
-    fn mix_job_off(&self, states: &[u32], q_off: i32, n_q: u32, outs: &[u32], norms: &[i32], tstride: u32) -> MixJob {
+    pub(crate) fn mix_job_off(&self, states: &[u32], q_off: i32, n_q: u32, outs: &[u32], norms: &[i32], tstride: u32) -> MixJob {
         let mut j = MixJob { n_s: states.len() as u32, n_q, q_off, eps: self.eps, tstride, ..Default::default() };
         assert!(states.len() <= 6);
         for (i, &s) in states.iter().enumerate() { j.s_off[i] = s; }
@@ -1716,6 +1920,21 @@ impl Engine {
                             Self::seg(&l.wsink, xin[0], ar.sink), Self::seg(&l.wk, xin[1], ar.k), Self::seg(&l.wv, xin[2], ar.v)];
         if let (Some(kp), Some(vp)) = (&l.kconvp, &l.vconvp) { segs.push(Self::seg(kp, xin[1], ar.kdyn)); segs.push(Self::seg(vp, xin[2], ar.vdyn)); }
         self.mv(e, C_QKV, &segs);
+        if let Some(p) = self.persona.borrow().as_ref() {
+            if p.has_attn_lora() {
+                let (l0, l1) = (&p.ad0.layers[ip], &p.ad1.layers[ip]);
+                use crate::persona::LinSpec;
+                let specs = [
+                    LinSpec { p0: l0.wq, p1: l1.wq, x_off: xin[0], y_off: ar.q, in_half: false, out_half: false },
+                    LinSpec { p0: l0.wgate, p1: l1.wgate, x_off: xin[0], y_off: ar.gate, in_half: false, out_half: false },
+                    LinSpec { p0: l0.wrel, p1: l1.wrel, x_off: xin[0], y_off: ar.rel, in_half: false, out_half: false },
+                    LinSpec { p0: l0.wsink, p1: l1.wsink, x_off: xin[0], y_off: ar.sink, in_half: false, out_half: false },
+                    LinSpec { p0: l0.wk, p1: l1.wk, x_off: xin[1], y_off: ar.k, in_half: false, out_half: false },
+                    LinSpec { p0: l0.wv, p1: l1.wv, x_off: xin[2], y_off: ar.v, in_half: false, out_half: false },
+                ];
+                p.encode_lin(self, e, 1, ar.plora_tmp, &specs);
+            }
+        }
         // ---- attention (split-K) with the split combine + output gate fused into the last split per kv group
         let (kb, vb, kcap) = self.kv_slot(slot);
         let tau = if l.swa { 1.0 } else { 1.0 + self.log_alpha * (((pos + 1) as f32 / self.log_floor).max(1.0)).ln() };
@@ -1786,10 +2005,28 @@ impl Engine {
         let block_start = ip % BLOCK == 0;
         let mut live: Vec<usize> = blocks.clone(); live.push(cur); live.extend_from_slice(pinned);
         let mid = va.alloc(&live);
-        let mut so = Self::seg(&l.wo, ar.attn_g, Arena::vec(mid));
-        so.epi = 1; so.res_off = if block_start { -1 } else { Arena::vec(cur) as i32 };
-        so.cs_off = cs_slot + (2 * NKV * HD * 3) as u32; so.convw_off = l.attn_post_conv;
-        self.mv(e, C_WO, &[so]);
+        let wo_lora = self.persona.borrow().as_ref().is_some_and(|p| p.has_attn_lora());
+        if wo_lora {
+            let so = Self::seg(&l.wo, ar.attn_g, ar.plora_wo);
+            self.mv(e, C_WO, &[so]);
+            if let Some(p) = self.persona.borrow().as_ref() {
+                let (l0, l1) = (&p.ad0.layers[ip], &p.ad1.layers[ip]);
+                let sp = [crate::persona::LinSpec { p0: l0.wo, p1: l1.wo, x_off: ar.attn_g, y_off: ar.plora_wo, in_half: false, out_half: false }];
+                p.encode_lin(self, e, 1, ar.plora_tmp, &sp);
+            }
+            let pc = crate::persona::PostConvDecArgs {
+                y_off: ar.plora_wo, out_off: Arena::vec(mid),
+                cs_off: cs_slot + (2 * NKV * HD * 3) as u32, convw_off: l.attn_post_conv,
+                res_off: if block_start { -1 } else { Arena::vec(cur) as i32 },
+                pad0: 0, pad1: 0, pad2: 0,
+            };
+            self.go(e, C_WO, "k_postconv_dec", &pc, (E / 256, 1, 1), 256);
+        } else {
+            let mut so = Self::seg(&l.wo, ar.attn_g, Arena::vec(mid));
+            so.epi = 1; so.res_off = if block_start { -1 } else { Arena::vec(cur) as i32 };
+            so.cs_off = cs_slot + (2 * NKV * HD * 3) as u32; so.convw_off = l.attn_post_conv;
+            self.mv(e, C_WO, &[so]);
+        }
         if block_start { blocks.push(cur); }
         // ---- FFN input: depth mix (+ control) -> normalized
         let mut st = blocks.clone(); st.push(mid);
@@ -1822,8 +2059,29 @@ impl Engine {
             convw_off: l.ffn_post_conv, pad: [0; 3],
         };
         // ---- experts
-        self.go(e, C_GU, "k_moe_gu", &ma, (FF / 4, TOPK, 1), 128);
-        self.go(e, C_DOWN, "k_moe_down", &ma, (E / 4, 1, 1), 64);
+        let moe_lora = self.persona.borrow().as_ref().is_some_and(|p| p.has_moe_lora());
+        if moe_lora {
+            let p_ref = self.persona.borrow();
+            let p = p_ref.as_ref().unwrap();
+            p.encode_moe_a_dec(self, e, ip, false, sel, x_off, ar.plora_tmp);
+            let la_gu = p.moe_b_args(ip, false, ar.plora_tmp);
+            e.pso(&self.gpu.pso("k_moe_gu_lora"));
+            e.bytes(&ma, 5);
+            e.bytes(&la_gu, 8);
+            e.dispatch((FF / 4, TOPK, 1), 128);
+            e.barrier();
+
+            p.encode_moe_a_dec(self, e, ip, true, sel, ar.act, ar.plora_tmp);
+            let la_dn = p.moe_b_args(ip, true, ar.plora_tmp);
+            e.pso(&self.gpu.pso("k_moe_down_lora"));
+            e.bytes(&ma, 5);
+            e.bytes(&la_dn, 8);
+            e.dispatch((E / 4, 1, 1), 64);
+            e.barrier();
+        } else {
+            self.go(e, C_GU, "k_moe_gu", &ma, (FF / 4, TOPK, 1), 128);
+            self.go(e, C_DOWN, "k_moe_down", &ma, (E / 4, 1, 1), 64);
+        }
         self.last_out.set(out); self.last_mid.set(mid);
         out
     }
@@ -1845,16 +2103,19 @@ impl Engine {
         let pb = |off: u32, rows: u32, k: u32, in_off: u32, in2: u32, out: u32| GSeg {
             w_lo: off, w_hi: 0, row_bytes: k * 2, wtype: T_BF16, nrows: rows, k, in_off, out_off: out, ldo: rows, wsrc: 1, in2, ..Default::default() };
         if self.hgemm {
-            let down: Vec<HSeg> = jobs.iter().map(|&(c, _, _, _, _)| Self::hseg_pb(lw.down[c], 64, (2 * E) as u32, b.cath[c], b.ctrlg[c])).collect();
+            let down: Vec<HSeg> = jobs.iter().map(|&(c, _, _, _, _)| {
+                let mut s = Self::hseg_pb(lw.down[c], 64, (2 * E) as u32, b.cath[c], b.gh[c]);
+                s.hout = 1;
+                s
+            }).collect();
             self.gemm_h(e, C_CTRLD, &down, t);
-            for &(c, _, _, _, _) in jobs { self.tohalf(e, C_CTRLA, b.ctrlg[c], 64, b.gh[c], 64, 64, t, None); }
-            e.barrier();
             // gain/forget GEMM with the apply fused into its epilogue: raw (un-normalized) outputs land in gain_o
             let mut ga = CtrlGfArgs { t: t as u32, njobs: jobs.len() as u32, ..Default::default() };
             for (i, &(c, u, m, _, _)) in jobs.iter().enumerate() {
                 ga.job[i] = CtrlGfJob { gain_w: lw.gain[c], forget_w: lw.forget[c], gh_off: b.gh[c], u_off: u, m_off: m, raw_off: b.gain_o[c], pad: [0; 2] };
             }
-            self.go(e, C_CTRLA, "k_ctrl_gf", &ga, (t.div_ceil(128), jobs.len() * (E / 32), 1), 256);
+            if t > 64 { self.go(e, C_CTRLA, "k_ctrl_gf", &ga, (t.div_ceil(128), jobs.len() * (E / 32), 1), 256); }
+            else { self.go(e, C_CTRLA, "k_ctrl_gf4", &ga, (1, jobs.len() * (E / 32), 1), 128); }
         } else {
             let down: Vec<GSeg> = jobs.iter().map(|&(c, _, _, _, _)| pb(lw.down[c], 64, (2 * E) as u32, b.cat_u[c], b.cat_m[c], b.ctrlg[c])).collect();
             self.gemm(e, C_CTRLD, &down, t);
@@ -1895,10 +2156,10 @@ impl Engine {
         if t > 64 { self.go(e, cls, "k_gemm_sg8", &a, (t.div_ceil(128), tiles as usize, 1), 256); }
         else { self.go(e, cls, "k_gemm_sg4", &a, (1, tiles as usize, 1), 128); }
     }
-    fn hseg(w: &QW, xh: u32, out: u32) -> HSeg {
+    pub(crate) fn hseg(w: &QW, xh: u32, out: u32) -> HSeg {
         HSeg { w_lo: w.off as u32, w_hi: (w.off >> 32) as u32, row_bytes: w.row_bytes, wtype: w.ty, nrows: w.rows, k: w.k, xh_off: xh, out_off: out, ldo: w.rows, ..Default::default() }
     }
-    fn hseg_pb(off: u32, rows: u32, k: u32, xh: u32, out: u32) -> HSeg {
+    pub(crate) fn hseg_pb(off: u32, rows: u32, k: u32, xh: u32, out: u32) -> HSeg {
         HSeg { w_lo: off, w_hi: 0, row_bytes: k * 2, wtype: T_BF16, nrows: rows, k, xh_off: xh, out_off: out, ldo: rows, wsrc: 1, ..Default::default() }
     }
 
@@ -2024,6 +2285,37 @@ impl Engine {
                 self.gemm_h(e, C_QKV, &hs, t);
                 self.gemm_h(e, C_QKV, &hq, n);
             }
+            if let Some(p) = self.persona.borrow().as_ref() {
+                if p.has_attn_lora() {
+                    let (l0, l1) = (&p.ad0.layers[ip], &p.ad1.layers[ip]);
+                    use crate::persona::LinSpec;
+                    let qh = hatt && qgh;
+                    if ts == 0 {
+                        let specs = [
+                            LinSpec { p0: l0.wq, p1: l1.wq, x_off: b.xh[xi[0]], y_off: b.q, in_half: true, out_half: qh },
+                            LinSpec { p0: l0.wgate, p1: l1.wgate, x_off: b.xh[xi[0]], y_off: b.gate, in_half: true, out_half: qh },
+                            LinSpec { p0: l0.wrel, p1: l1.wrel, x_off: b.xh[xi[0]], y_off: b.rel, in_half: true, out_half: false },
+                            LinSpec { p0: l0.wsink, p1: l1.wsink, x_off: b.xh[xi[0]], y_off: b.sink, in_half: true, out_half: false },
+                            LinSpec { p0: l0.wk, p1: l1.wk, x_off: b.xh[xi[1]], y_off: b.k, in_half: true, out_half: false },
+                            LinSpec { p0: l0.wv, p1: l1.wv, x_off: b.xh[xi[2]], y_off: b.v, in_half: true, out_half: false },
+                        ];
+                        p.encode_lin(self, e, t, b.plora_tmp, &specs);
+                    } else {
+                        let kv_specs = [
+                            LinSpec { p0: l0.wk, p1: l1.wk, x_off: b.xh[xi[1]], y_off: b.k, in_half: true, out_half: false },
+                            LinSpec { p0: l0.wv, p1: l1.wv, x_off: b.xh[xi[2]], y_off: b.v, in_half: true, out_half: false },
+                        ];
+                        p.encode_lin(self, e, t, b.plora_tmp, &kv_specs);
+                        let q_specs = [
+                            LinSpec { p0: l0.wq, p1: l1.wq, x_off: sh(b.xh[xi[0]], E / 2), y_off: sh(b.q, if qh { NH * HD / 2 } else { NH * HD }), in_half: true, out_half: qh },
+                            LinSpec { p0: l0.wgate, p1: l1.wgate, x_off: sh(b.xh[xi[0]], E / 2), y_off: sh(b.gate, if qh { NH * HD / 2 } else { NH * HD }), in_half: true, out_half: qh },
+                            LinSpec { p0: l0.wrel, p1: l1.wrel, x_off: sh(b.xh[xi[0]], E / 2), y_off: sh(b.rel, NH * NREL), in_half: true, out_half: false },
+                            LinSpec { p0: l0.wsink, p1: l1.wsink, x_off: sh(b.xh[xi[0]], E / 2), y_off: sh(b.sink, NH), in_half: true, out_half: false },
+                        ];
+                        p.encode_lin(self, e, n, b.plora_tmp, &q_specs);
+                    }
+                }
+            }
         } else {
             self.gemm(e, C_QKV, &segs, t);
         }
@@ -2077,6 +2369,13 @@ impl Engine {
         if self.hgemm {
             if !hatt { self.tohalf(e, C_WO, b.attn_g, NH * HD, b.agh, NH * HD, NH * HD, t, None); e.barrier(); }
             self.gemm_h(e, C_WO, &[Self::hseg(&l.wo, sh(b.agh, NH * HD / 2), sh(b.wo_y, E))], n);
+            if let Some(p) = self.persona.borrow().as_ref() {
+                if p.has_attn_lora() {
+                    let (l0, l1) = (&p.ad0.layers[ip], &p.ad1.layers[ip]);
+                    let sp = [crate::persona::LinSpec { p0: l0.wo, p1: l1.wo, x_off: sh(b.agh, NH * HD / 2), y_off: sh(b.wo_y, E), in_half: true, out_half: false }];
+                    p.encode_lin(self, e, n, b.plora_tmp, &sp);
+                }
+            }
         } else {
             self.gemm(e, C_WO, &[Self::gseg(&l.wo, b.attn_g, b.wo_y)], t);
         }
@@ -2133,18 +2432,35 @@ impl Engine {
             // gather the FFN input rows of every (token, expert) assignment into contiguous half rows
             self.tohalf_x(e, C_GATHER, sh(b.fh, E / 2), E, b.xgh, E, E, n * TOPK, Some(b.perm), true);
             e.barrier();
+            let moe_lora = self.persona.borrow().as_ref().is_some_and(|p| p.has_moe_lora());
             // tiles in four widths, sized on the GPU by the routing kernel (indirect dispatch); classes run concurrently
             if self.skip.get() & (1 << C_GU) == 0 {
-                for (c, (name, _, tg)) in MOE_CLS.iter().enumerate() {
-                    let g = MoeGemmHArgs {
-                        w_lo: l.gu.off as u32, w_hi: (l.gu.off >> 32) as u32, expert_bytes: l.gu.expert_bytes as u32, row_bytes: l.gu.row_bytes,
-                        wtype: l.gu.ty, nrows: (2 * FF) as u32, k: es, xh_off: b.xgh, tiles_off: b.tl[c], ntiles_off: b.ind + (c * 4) as u32,
-                        out_off: b.acth, ldo: FF as u32, situ: 1, aw_off: b.aw, beta: self.situ_beta, lbeta: self.situ_lbeta,
-                    };
-                    e.pso(&self.gpu.pso(name)); e.bytes(&g, 5);
-                    e.dispatch_indirect(&self.act.borrow(), (b.ind as usize + c * 4) * 4, *tg);
+                if moe_lora {
+                    let p_ref = self.persona.borrow();
+                    let p = p_ref.as_ref().unwrap();
+                    p.encode_moe_a13_pf(self, e, ip, n, sh(b.fh, E / 2), b.sel, b.inv, b.plora_tmp);
+                    let lora_names = ["k_moe_sg8_lora", "k_moe_sg4_lora"];
+                    for (c, (_, _, tg)) in MOE_CLS.iter().enumerate() {
+                        let g = MoeGemmHArgs {
+                            w_lo: l.gu.off as u32, w_hi: (l.gu.off >> 32) as u32, expert_bytes: l.gu.expert_bytes as u32, row_bytes: l.gu.row_bytes,
+                            wtype: l.gu.ty, nrows: (2 * FF) as u32, k: es, xh_off: b.xgh, tiles_off: b.tl[c], ntiles_off: b.ind + (c * 4) as u32,
+                            out_off: b.acth, ldo: FF as u32, situ: 1, aw_off: b.aw, beta: self.situ_beta, lbeta: self.situ_lbeta,
+                        };
+                        p.encode_moe_gu_pf_lora(self, e, ip, &g, lora_names[c], (b.ind as usize + c * 4) * 4, *tg, b.plora_tmp);
+                    }
+                    e.barrier();
+                } else {
+                    for (c, (name, _, tg)) in MOE_CLS.iter().enumerate() {
+                        let g = MoeGemmHArgs {
+                            w_lo: l.gu.off as u32, w_hi: (l.gu.off >> 32) as u32, expert_bytes: l.gu.expert_bytes as u32, row_bytes: l.gu.row_bytes,
+                            wtype: l.gu.ty, nrows: (2 * FF) as u32, k: es, xh_off: b.xgh, tiles_off: b.tl[c], ntiles_off: b.ind + (c * 4) as u32,
+                            out_off: b.acth, ldo: FF as u32, situ: 1, aw_off: b.aw, beta: self.situ_beta, lbeta: self.situ_lbeta,
+                        };
+                        e.pso(&self.gpu.pso(name)); e.bytes(&g, 5);
+                        e.dispatch_indirect(&self.act.borrow(), (b.ind as usize + c * 4) * 4, *tg);
+                    }
+                    e.barrier();
                 }
-                e.barrier();
             }
             if self.skip.get() & (1 << C_DOWN) == 0 {
                 for (c, (name, _, tg)) in MOE_CLS.iter().enumerate() {
@@ -2168,7 +2484,14 @@ impl Engine {
         self.go(e, C_DOWN, mg, &dn, (E / 64, max_tiles, 1), 128);
         }
         let ca = MoeCombArgs { yd_off: b.yd, inv_off: b.inv, sel_off: b.sel, out_off: sh(b.ffn_y, E) };
-        if self.hgemm { self.go(e, C_COMB2, "k_moe_comb_h", &ca, (n, E.div_ceil(1024), 1), 256); }
+        if self.hgemm {
+            self.go(e, C_COMB2, "k_moe_comb_h", &ca, (n, E.div_ceil(1024), 1), 256);
+            if let Some(p) = self.persona.borrow().as_ref() {
+                if p.has_moe_lora() {
+                    p.encode_moe_w2_pf(self, e, ip, n, b.acth, b.sel, b.inv, b.plora_tmp, sh(b.ffn_y, E));
+                }
+            }
+        }
         else { self.go(e, C_DOWN, "k_moe_comb_b", &ca, (E / 256, t, 1), 256); }
         let mut live: Vec<usize> = blocks.clone(); live.push(mid); live.extend_from_slice(pinned);
         let out = va.alloc(&live);
