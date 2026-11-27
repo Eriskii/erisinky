@@ -98,6 +98,7 @@ pub const KERNELS: &[&str] = &[
     "k_moe_route6", "k_moe_dir_gu_dyn4", "k_moe_dir_gu_dyn8", "k_moe_dir_dn_dyn4", "k_moe_dir_dn_dyn8",
     "k_moe_sg2", "k_moe_sg1",
     "k_wo_post_sg8_hcs", "k_wo_post_sg4_hcs", "k_moe_comb_post_hcs", "k_zero_cs_hcs", "k_broadcast_cs_hcs",
+    "k_wo_mv_hcs", "k_moe_down_hcs",
     "k_attn_paged_b_hcs", "k_postconv_hcs_chunk", "k_state_upd_hcs",
     "k_kvprep_wht_write", "k_fp16_to_wht_compress", "k_page_summarize_kv",
     "k_score_pages_quest", "k_attn_sparse_wht_b", "k_attn_wht_chunk",
@@ -115,20 +116,20 @@ pub(crate) struct MixJob { pub n_s: u32, pub n_q: u32, pub s_off: [u32; 6], pub 
                  pub hcopy: [[i32; 3]; 4], pub hout: [i32; 4], pub hstride: u32, pub nof32: u32 }
 
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct Seg {
-    w_lo: u32, w_hi: u32, row_bytes: u32, wtype: u32,
-    nrows: u32, k: u32, tg_start: u32, in_off: u32,
-    in2_off: i32, norm_off: i32, ss_off: i32, ss_n: i32,
-    out_off: u32, epi: u32, res_off: i32, cs_off: u32,
-    convw_off: u32, pad: [u32; 3],
+pub(crate) struct Seg {
+    pub w_lo: u32, pub w_hi: u32, pub row_bytes: u32, pub wtype: u32,
+    pub nrows: u32, pub k: u32, pub tg_start: u32, pub in_off: u32,
+    pub in2_off: i32, pub norm_off: i32, pub ss_off: i32, pub ss_n: i32,
+    pub out_off: u32, pub epi: u32, pub res_off: i32, pub cs_off: u32,
+    pub convw_off: u32, pub pad: [u32; 3],
 }
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct MvArgs { nseg: u32, eps: f32, post: u32, ctr: u32, bias_off: u32, sel_off: u32, wscale: f32, pad: u32, seg: [Seg; 12] }
+pub(crate) struct MvArgs { pub nseg: u32, pub eps: f32, pub post: u32, pub ctr: u32, pub bias_off: u32, pub sel_off: u32, pub wscale: f32, pub pad: u32, pub seg: [Seg; 12] }
 
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct CtrlJob { u_off: u32, m_off: u32, d_off: u32, out_off: u32, gain_off: u32, forget_off: u32, res_out: u32, ss_off: u32, norm_w: i32, ctr: u32 }
+pub(crate) struct CtrlJob { pub u_off: u32, pub m_off: u32, pub d_off: u32, pub out_off: u32, pub gain_off: u32, pub forget_off: u32, pub res_out: u32, pub ss_off: u32, pub norm_w: i32, pub ctr: u32 }
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct CtrlArgs { n_c: u32, tstride: u32, pad: [u32; 2], job: [CtrlJob; 4] }
+pub(crate) struct CtrlArgs { pub n_c: u32, pub tstride: u32, pub pad: [u32; 2], pub job: [CtrlJob; 4] }
 
 #[repr(C)] #[derive(Clone, Copy, Default)]
 struct AttnArgs {
@@ -147,14 +148,14 @@ pub struct Prune { pub(crate) bag: Buf, pub(crate) rows: usize, pub(crate) r0: u
 struct CombineArgs { part_off: u32, nsplit: u32, gate_off: u32, out_off: u32 }
 
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct MoeArgs {
-    logits_off: u32, bias_off: u32, sel_off: u32, x_off: u32,
-    norm_off: i32, ss_off: i32, ss_n: i32, eps: f32,
-    gu_lo: u32, gu_hi: u32, gu_expert_bytes: u32, gu_row_bytes: u32,
-    act_off: u32, wscale: f32, beta: f32, lbeta: f32,
-    dn_lo: u32, dn_hi: u32, dn_expert_bytes: u32, dn_row_bytes: u32,
-    dn_type: u32, out_off: u32, res_off: i32, cs_off: u32,
-    convw_off: u32, pad: [u32; 3],
+pub(crate) struct MoeArgs {
+    pub logits_off: u32, pub bias_off: u32, pub sel_off: u32, pub x_off: u32,
+    pub norm_off: i32, pub ss_off: i32, pub ss_n: i32, pub eps: f32,
+    pub gu_lo: u32, pub gu_hi: u32, pub gu_expert_bytes: u32, pub gu_row_bytes: u32,
+    pub act_off: u32, pub wscale: f32, pub beta: f32, pub lbeta: f32,
+    pub dn_lo: u32, pub dn_hi: u32, pub dn_expert_bytes: u32, pub dn_row_bytes: u32,
+    pub dn_type: u32, pub out_off: u32, pub res_off: i32, pub cs_off: u32,
+    pub convw_off: u32, pub pad: [u32; 3],
 }
 
 // ---- prefill arg structs (mirror prefill.metal)
@@ -262,7 +263,7 @@ impl BArena {
     fn vec(&self, i: usize) -> u32 { self.vec0 + (i * self.cap * E) as u32 }
 }
 #[repr(C)] #[derive(Clone, Copy, Default)]
-struct ArgmaxArgs { logits_off: u32, n: u32, part_off: u32, nparts: u32, out_index: u32, pad: [u32; 3] }
+pub(crate) struct ArgmaxArgs { pub logits_off: u32, pub n: u32, pub part_off: u32, pub nparts: u32, pub out_index: u32, pub pad: [u32; 3] }
 
 // ----------------------------------------------------------------------------- weights
 #[derive(Clone, Copy, Default, Debug)]
@@ -390,7 +391,7 @@ impl VecAlloc {
 pub struct Engine {
     pub g: Gguf,
     pub gpu: Gpu,
-    pub(crate) w: Buf, pub pb: Buf, pub cs: Buf, pub toks: Buf, ctr: Buf,
+    pub(crate) w: Buf, pub pb: Buf, pub cs: Buf, pub toks: Buf, pub(crate) ctr: Buf,
     /// activations: the small decode arena, followed by the batch (prefill) arena while a prefill needs one
     act: std::cell::RefCell<Buf>,
     /// K/V cache (fp16). Sliding-window layers keep exactly their window (a ring of EXT keys per slot), full-attention
@@ -407,7 +408,7 @@ pub struct Engine {
     pub(crate) loops: Vec<LoopW>,
     pub(crate) tok_embd: QW, pub(crate) tok_norm: u32, pub(crate) output: QW, pub(crate) output_norm: u32, pub(crate) output_res_query: u32,
     pub ar: Arena,
-    pub kv8: bool, pub(crate) kvb: usize, ba: std::cell::Cell<BArena>, pub chunk: usize, pub tensor: bool, pub hgemm: bool, sep_comb: bool, sep_topk: bool,
+    pub kv8: bool, pub(crate) kvb: usize, ba: std::cell::Cell<BArena>, pub chunk: usize, pub tensor: bool, pub hgemm: bool, sep_comb: bool, pub(crate) sep_topk: bool,
     /// last-layer tail mode of the prefill (dev tools switch it off to profile full layers)
     pub tail: std::cell::Cell<bool>,
     pub skip: std::cell::Cell<u32>,
@@ -1749,12 +1750,12 @@ impl Engine {
         e.buf(&self.ctr, 0, 7);
     }
 
-    fn seg(w: &QW, in_off: u32, out_off: u32) -> Seg {
+    pub(crate) fn seg(w: &QW, in_off: u32, out_off: u32) -> Seg {
         debug_assert!(w.ty == T_Q4_K || w.ty == T_Q6_K);
         Seg { w_lo: w.off as u32, w_hi: (w.off >> 32) as u32, row_bytes: w.row_bytes, wtype: w.ty, nrows: w.rows, k: w.k,
               in_off, in2_off: -1, norm_off: -1, ss_off: -1, ss_n: 0, out_off, ..Default::default() }
     }
-    fn seg_pb(off: u32, rows: u32, k: u32, in_off: u32, out_off: u32) -> Seg {
+    pub(crate) fn seg_pb(off: u32, rows: u32, k: u32, in_off: u32, out_off: u32) -> Seg {
         Seg { w_lo: off, w_hi: 0, row_bytes: k * 2, wtype: T_BF16, nrows: rows, k, in_off, in2_off: -1, norm_off: -1, ss_off: -1, ss_n: 0, out_off, ..Default::default() }
     }
     #[inline]

@@ -225,6 +225,14 @@ struct MoeCombPostArgs {
 }
 
 #[repr(C)] #[derive(Clone, Copy, Default)]
+struct MoeDownHcsArgs {
+    sel_off: u32, act_off: u32, dn_lo: u32, dn_hi: u32,
+    dn_expert_bytes: u32, dn_row_bytes: u32, dn_type: u32, out_off: u32,
+    res_off: u32, convw_t_off: u32, layer_slot: u32, max_batch: u32,
+    seq_cs_off: u32, seq_pos_off: u32, pad0: u32, pad1: u32,
+}
+
+#[repr(C)] #[derive(Clone, Copy, Default)]
 struct PagedAttnArgs {
     b: u32, pool_cap: u32, slot_idx: u32, is_swa: u32, pt_stride: u32, pt_mod: u32,
     seq_pos_off: u32, seq_suf_off: u32, seq_cs_off: u32, pt_off: u32,
@@ -421,12 +429,22 @@ struct OptArena {
     ffn_y: u32,
     am_part: u32,
     lm_slice: u32,
+    // B=1 streaming matvec fast-path scratch (disjoint/phase-aliased with batched buffers)
+    b1_cat: [u32; 4],
+    b1_ctrlg: [u32; 4],
+    b1_ssp: [u32; 4],
+    b1_cin: [u32; 3],
+    b1_finc: u32,
+    b1_act: u32,
+    b1_fout: u32,
+    b1_logits: u32,
+    b1_amax: u32,
     max_split: usize,
     end: u32,
 }
 
 impl OptArena {
-    fn new(cap: usize, n_vocab: usize, need_chunk_y: bool) -> Self {
+    fn new(cap: usize, n_vocab: usize, n_vocab_pad: usize, need_chunk_y: bool) -> Self {
         let cap = cap.max(1);
         let mut o = 0u32;
         let take = |o: &mut u32, n: usize| -> u32 {
@@ -438,6 +456,9 @@ impl OptArena {
         d.vec0 = take(&mut o, B_NVEC * cap * E);
         for i in 0..4 { d.msg[i] = take(&mut o, cap * E); }
         for i in 0..4 { d.cath[i] = take(&mut o, cap * E); }
+        for i in 0..4 { d.b1_cat[i] = take(&mut o, 2 * E); }
+        for i in 0..4 { d.b1_ctrlg[i] = take(&mut o, 64); }
+        for i in 0..4 { d.b1_ssp[i] = take(&mut o, 128); }
         let scratch0 = o;
 
         // Attention phase
@@ -446,6 +467,7 @@ impl OptArena {
         for i in 0..4 { d.gain_o[i] = take(&mut oa, cap * E); }
         for i in 0..4 { d.gh[i] = take(&mut oa, cap * 32); }
         for i in 0..3 { d.xh[i] = take(&mut oa, cap * E / 2); }
+        for i in 0..3 { d.b1_cin[i] = take(&mut oa, E); }
         d.q = take(&mut oa, cap * NH * HD / 2);
         d.gate = take(&mut oa, cap * NH * HD / 2);
         d.k = take(&mut oa, cap * NKV * HD);
@@ -467,8 +489,10 @@ impl OptArena {
         let ffn_gain_o = take(&mut of, cap * E);
         let ffn_gh = take(&mut of, cap * 32);
         d.fh = take(&mut of, cap * E / 2);
+        d.b1_finc = take(&mut of, E);
         d.rlog = take(&mut of, cap * NEXP);
         d.sel = take(&mut of, cap * 16);
+        d.b1_act = take(&mut of, TOPK * FF);
         d.perm = take(&mut of, cap * TOPK);
         d.inv = take(&mut of, cap * TOPK);
         d.aw = take(&mut of, cap * TOPK);
@@ -494,7 +518,13 @@ impl OptArena {
         d.am_part = take(&mut ol, cap * nvch * 2);
         d.lm_slice = if cap == 1 { take(&mut ol, LM_VSLICE_256K) } else { 0 };
 
-        d.end = oa.max(of).max(ol);
+        // B=1 streaming matvec LM head + argmax phase (aliases scratch0 after final layer)
+        let mut ol_b1 = scratch0;
+        d.b1_fout = take(&mut ol_b1, E);
+        d.b1_logits = take(&mut ol_b1, n_vocab_pad.max(n_vocab));
+        d.b1_amax = take(&mut ol_b1, 2 * 256);
+
+        d.end = oa.max(of).max(ol).max(ol_b1);
         d
     }
     #[inline]
@@ -577,6 +607,41 @@ fn enc_ctrl_b(eng: &Engine, e: &Enc, skip: u32, d: &OptArena, lw: &LoopW, jobs: 
         a.job[i] = CtrlBJob { u_off: d.gain_o[c], m_off: u32::MAX, g_off: 0, f_off: 0, out_off: 0, norm_w: nw, h_off: hout[i] as i32, nof32: 1 };
     }
     enc_go(eng, e, skip, C_CTRLN, "k_ctrl_apply_b", &a, (t, jobs.len(), 1), 256);
+}
+
+fn enc_mix_mv(eng: &Engine, e: &Enc, skip: u32, cls: u32, jobs: &[MixJob]) {
+    if skip & (1 << cls) != 0 { return; }
+    e.pso(&eng.gpu.pso("k_mix"));
+    e.bytes_slice(jobs, 5);
+    e.dispatch((jobs.len(), 1, 1), 768);
+    e.barrier();
+}
+
+fn enc_mv(eng: &Engine, e: &Enc, skip: u32, cls: u32, segs: &[Seg]) {
+    enc_mv_post(eng, e, skip, cls, segs, MvArgs::default());
+}
+
+fn enc_mv_post(eng: &Engine, e: &Enc, skip: u32, cls: u32, segs: &[Seg], post: MvArgs) {
+    let mut a = MvArgs { nseg: segs.len() as u32, eps: eng.eps, ..post };
+    let mut tg = 0u32;
+    for (i, s) in segs.iter().enumerate() {
+        a.seg[i] = *s;
+        a.seg[i].tg_start = tg;
+        tg += s.nrows.div_ceil(8);
+    }
+    enc_go(eng, e, skip, cls, "k_mv", &a, (tg as usize, 1, 1), 128);
+}
+
+fn enc_ctrl_dec(eng: &Engine, e: &Enc, skip: u32, d: &OptArena, jobs: &[CtrlJob]) {
+    e.buf(&eng.ctr, 0, 7);
+    let segs: Vec<Seg> = jobs.iter().map(|j| {
+        let c = d.b1_ctrlg.iter().position(|&o| o == j.out_off).unwrap();
+        Engine::seg_pb(j.d_off, 64, (2 * E) as u32, d.b1_cat[c], j.out_off)
+    }).collect();
+    enc_mv(eng, e, skip, C_CTRLD, &segs);
+    let mut a = CtrlArgs { n_c: jobs.len() as u32, ..Default::default() };
+    for (i, j) in jobs.iter().enumerate() { a.job[i] = *j; }
+    enc_go(eng, e, skip, C_CTRLA, "k_ctrl_apply", &a, (E / 32, jobs.len(), 1), 256);
 }
 
 fn enc_moe_dispatch(eng: &Engine, e: &Enc, act: &Buf, skip: u32, d: &OptArena, l: &Layer, t: usize, cfg: MoeRouteCfg) {
@@ -942,7 +1007,7 @@ pub fn run_bench_moe_opt(eng: &Engine, batches: &[usize], max_mem_gb: Option<f64
     // ---- Step 1: Numerical parity check at B=64 (Layer 0 MoE + FP16 CS) ----
     {
         let b_chk = 64usize;
-        let da = OptArena::new(b_chk, eng.n_vocab, false);
+        let da = OptArena::new(b_chk, eng.n_vocab, eng.output.rows as usize, false);
         let mut mg = MemGuard::new(max_mem);
         let act = mg.try_alloc(&eng.gpu, da.end as usize * 4, "chk_act").expect("chk_act");
         let cs_f32 = mg.try_alloc(&eng.gpu, b_chk * CS_SEQ_ELEMS * 4, "chk_cs32").expect("chk_cs32");
@@ -1035,7 +1100,7 @@ pub fn run_bench_moe_opt(eng: &Engine, batches: &[usize], max_mem_gb: Option<f64
 
     for &b_len in batches {
         let b_len = b_len.max(1);
-        let da = OptArena::new(b_len, eng.n_vocab, false);
+        let da = OptArena::new(b_len, eng.n_vocab, eng.output.rows as usize, false);
         let act_bytes = da.end as usize * 4;
         let cs32_bytes = b_len * CS_SEQ_ELEMS * 4;
         let cs16_bytes = b_len * CS_SEQ_ELEMS * 2;
@@ -2194,7 +2259,7 @@ impl<'a> Kv256kPool<'a> {
 
         // 1. Activation arena (decode batch or streaming prefill chunk)
         let arena_cap = cfg.max_active_batch.max(cfg.chunk_cap);
-        let da = OptArena::new(arena_cap, eng.n_vocab, cfg.chunk_cap > 0);
+        let da = OptArena::new(arena_cap, eng.n_vocab, eng.output.rows as usize, cfg.chunk_cap > 0);
         let act = mem.try_alloc(&eng.gpu, da.end as usize * 4, "kv256k_act")?;
 
         // 2. FP16 CS_POOL (half!) + 16 KiB static per-head DC key mean buffer
@@ -3491,10 +3556,16 @@ impl<'a> Kv256kPool<'a> {
         };
         enc_go(self.eng, &e, skip, C_EMBED, "k_embed", &ea, (b_len, 1, 1), 256);
 
+        let max_pos = sessions.iter().map(|s| s.pos).max().unwrap_or(0);
+        if b_len == 1 && Self::use_b1_mv() {
+            self.encode_decode_step_b1_mv(&e, meta_idx, tok_out_idx, max_pos, skip, run_argmax);
+            e.end();
+            return Ok((cb, pinned_pids));
+        }
+
         let mut va = VecAlloc { next: 1, n: B_NVEC };
         let mut blocks: Vec<usize> = Vec::new();
         let mut cur = 0usize;
-        let max_pos = sessions.iter().map(|s| s.pos).max().unwrap_or(0);
         let use_wht2 = self.cfg.use_wht2_sketch;
         let use_tiered_swa = self.cfg.use_tiered_swa;
         let dc_on = self.use_dc_mean;
@@ -3728,6 +3799,312 @@ impl<'a> Kv256kPool<'a> {
         Ok((cb, pinned_pids))
     }
 
+    #[inline]
+    fn use_b1_mv() -> bool {
+        std::env::var("INK_KV256K_NO_MV").is_err()
+    }
+
+    /// High-throughput `B = 1` streaming matvec fast path for `Kv256kPool` decode!
+    /// Uses `k_mix`, `k_mv`, `k_ctrl_apply`, `k_wo_mv_hcs`, `k_moe_gu`, `k_moe_down_hcs`,
+    /// `k_argmax1`/`k_argmax2` while keeping Tiered-SWA, WHT-K3V2/KV4, WHT-2bit-sketch,
+    /// `K_DC_MEAN`, and FP16 `cs_pool_hcs` 100% identical to batched decode.
+    fn encode_decode_step_b1_mv(
+        &self,
+        e: &Enc,
+        meta_idx: usize,
+        tok_out_idx: usize,
+        max_pos: usize,
+        skip: u32,
+        run_argmax: bool,
+    ) {
+        let da = &self.da;
+        let ml = self.ml;
+        let pt = self.cfg.page_toks;
+        let use_wht2 = self.cfg.use_wht2_sketch;
+        let use_tiered_swa = self.cfg.use_tiered_swa;
+        let dc_on = self.use_dc_mean;
+
+        let mut va = VecAlloc { next: 1, n: B_NVEC };
+        let mut blocks: Vec<usize> = Vec::new();
+        let mut cur = 0usize;
+
+        let run_layer_mv = |slot: usize, ip: usize, cur_v: usize, blks: &mut Vec<usize>, msg: Option<(usize, usize)>, va: &mut VecAlloc, pinned: &[usize]| -> usize {
+            let l = &self.eng.layers[ip];
+            let ctl = msg.map(|_| &self.eng.loops[ip - LOOP_START]);
+
+            // 1. Attention inputs: depth mix (+ loop controllers via k_mv + k_ctrl_apply)
+            let norms: [i32; 3] = if l.swa { [l.attn_norm; 3] } else { [l.q_inp_norm, l.k_inp_norm, l.v_inp_norm] };
+            let mut st: Vec<u32> = blks.iter().map(|&v| da.vec(v)).collect();
+            st.push(da.vec(cur_v));
+            let nq = if l.attn_res_query >= 0 { l.n_attn_q } else { 1 };
+            let xin: [u32; 3];
+            if let Some(lw) = ctl {
+                let (b0, b1) = msg.unwrap();
+                let mut ja = self.eng.mix_job_off(&st, l.attn_res_query, nq, &da.inp[..nq as usize], &[], 0);
+                if l.swa {
+                    ja.ncopy[0] = [da.b1_cat[0] as i32, da.b1_cat[1] as i32, da.b1_cat[2] as i32];
+                } else {
+                    for j in 0..3 { ja.ncopy[j][0] = da.b1_cat[j] as i32; }
+                }
+                let mut jm = self.eng.mix_job_off(&[da.vec(b0), da.vec(b1)], lw.msg_query as i32, 4, &da.msg, &[], 0);
+                for j in 0..4 { jm.ncopy[j][0] = (da.b1_cat[j] + E as u32) as i32; }
+                enc_mix_mv(self.eng, e, skip, C_MIXA, &[ja, jm]);
+                let mut cj = Vec::with_capacity(3);
+                for j in 0..3 {
+                    let u = if l.swa { da.inp[0] } else { da.inp[j] };
+                    cj.push(CtrlJob {
+                        u_off: u, m_off: da.msg[j], d_off: lw.down[j], out_off: da.b1_ctrlg[j],
+                        gain_off: lw.gain[j], forget_off: lw.forget[j],
+                        res_out: da.b1_cin[j], ss_off: da.b1_ssp[j], norm_w: norms[j], ctr: 8 + j as u32,
+                    });
+                }
+                enc_ctrl_dec(self.eng, e, skip, da, &cj);
+                e.buf(&self.meta[meta_idx], 0, 7);
+                xin = da.b1_cin;
+            } else {
+                let nn: Vec<i32> = if l.swa { vec![l.attn_norm] } else { norms.to_vec() };
+                let ja = self.eng.mix_job_off(&st, l.attn_res_query, nq, &da.inp[..nq as usize], &nn, 0);
+                enc_mix_mv(self.eng, e, skip, C_MIXA, &[ja]);
+                xin = if l.swa { [da.inp[0]; 3] } else { [da.inp[0], da.inp[1], da.inp[2]] };
+            }
+
+            // 2. QKV projections via streaming k_mv (wq & wgate write half directly via epi = 2)
+            let mut sq = Engine::seg(&l.wq, xin[0], da.q);
+            sq.epi = 2;
+            let mut sg = Engine::seg(&l.wgate, xin[0], da.gate);
+            sg.epi = 2;
+            let mut segs = vec![
+                sq,
+                sg,
+                Engine::seg(&l.wrel, xin[0], da.rel),
+                Engine::seg(&l.wsink, xin[0], da.sink),
+                Engine::seg(&l.wk, xin[1], da.k),
+                Engine::seg(&l.wv, xin[2], da.v),
+            ];
+            if let (Some(kp), Some(vp)) = (&l.kconvp, &l.vconvp) {
+                segs.push(Engine::seg(kp, xin[1], da.kdyn));
+                segs.push(Engine::seg(vp, xin[2], da.vdyn));
+            }
+            enc_mv(self.eng, e, skip, C_QKV, &segs);
+
+            // 3. Attention (100% identical Tiered-SWA / legacy paged SWA / Sparse-WHT + DC-mean + FP16 CS)
+            let (is_swa, slot_idx) = self.eng.slot_kind[slot];
+            if is_swa {
+                if use_tiered_swa {
+                    e.buf(&self.swa_inner, 0, 3);
+                    e.buf(&self.swa_inner_sc, 0, 6);
+                    e.buf(&self.swa_outer_comp, 0, 8);
+                    e.buf(&self.swa_outer_sc, 0, 9);
+                    let ta = TieredSwaAttnArgs {
+                        b: 1,
+                        inner_cap: self.swa_inner_cap as u32,
+                        outer_cap: self.swa_outer_cap as u32,
+                        slot_idx: slot_idx as u32,
+                        inner_fp16: self.cfg.swa_inner_fp16 as u32,
+                        layer_slot: slot as u32,
+                        max_batch: self.cfg.max_active_batch as u32,
+                        pad0: 0,
+                        seq_pos_off: ml.seq_pos,
+                        seq_cs_off: ml.seq_cs,
+                        inner_pt_off: ml.swa_inner_pt,
+                        outer_pt_off: ml.swa_outer_pt,
+                        q_off: da.q, k_off: da.k, v_off: da.v, r_off: da.rel,
+                        sink_off: da.sink, gate_off: da.gate, out_off: da.agh, pad1: 0,
+                        kconv_t_w: l.k_conv_t, vconv_t_w: l.v_conv_t, qclip_w: l.q_clip, relclip_w: l.rel_clip,
+                        relbias_w: l.rel_bias, pad2: 0, pad3: 0, pad4: 0,
+                    };
+                    enc_go(self.eng, e, skip, C_ATTN, "k_attn_swa_tiered_b", &ta, (NKV, 1, 1), 128);
+                } else {
+                    e.buf(&self.swa_pool, 0, 3);
+                    let nsplit = 64usize.div_ceil(NKV).min(da.max_split).max(1);
+                    let pa = PagedAttnArgs {
+                        b: 1, pool_cap: self.swa_cap as u32, slot_idx: slot_idx as u32, is_swa: 1,
+                        pt_stride: SWA_RING_BLKS as u32, pt_mod: SWA_RING_BLKS as u32,
+                        seq_pos_off: ml.seq_pos, seq_suf_off: ml.seq_suf, seq_cs_off: ml.seq_cs, pt_off: ml.swa_pt,
+                        layer_slot: slot as u32, max_batch: self.cfg.max_active_batch as u32,
+                        q_off: da.q, k_off: da.k, v_off: da.v, r_off: da.rel, sink_off: da.sink,
+                        kdyn_off: -1, vdyn_off: -1,
+                        kconv_t_w: l.k_conv_t, vconv_t_w: l.v_conv_t, qclip_w: l.q_clip, relclip_w: l.rel_clip, relbias_w: l.rel_bias,
+                        log_alpha: self.eng.log_alpha, log_floor: self.eng.log_floor,
+                        gate_off: da.gate, out_off: da.agh, part_off: da.part, nsplit: nsplit as u32, prefix_len: 0,
+                        qp_off: da.qp, rp_off: da.rp, pad0: 0,
+                    };
+                    enc_go(self.eng, e, skip, C_ATTN, "k_attn_paged_b_hcs", &pa, (nsplit, NKV, 1), 128);
+                    if nsplit > 1 {
+                        let ca = CombineBArgs { part_off: da.part, nsplit: nsplit as u32, gate_off: da.gate, out_off: da.agh };
+                        enc_go(self.eng, e, skip, C_COMB, "k_attn_combine_b", &ca, (NH, 1, 1), 128);
+                    }
+                }
+            } else {
+                e.buf(&self.kv_comp, 0, 3);
+                e.buf(&self.kv_scales, 0, 6);
+                e.buf(&self.kv_sum, 0, 8);
+                e.buf(&self.aux, 0, 9);
+                let eff_sink = if dc_on { da.eff_sink } else { da.sink };
+                let eff_log_floor = if self.tau_pos_cap > 0 && max_pos + 1 > self.tau_pos_cap {
+                    self.eng.log_floor * ((max_pos + 1) as f32 / self.tau_pos_cap as f32)
+                } else {
+                    self.eng.log_floor
+                };
+                let kw = WhtKvPrepArgs {
+                    b: 1, pool_cap: self.lru.hot_cap as u32, slot_idx: slot_idx as u32,
+                    page_toks: pt as u32, kv_bits: self.cfg.kv_bits,
+                    layer_slot: slot as u32, max_batch: self.cfg.max_active_batch as u32,
+                    is_prefill: 0, p0: 0,
+                    seq_pos_off: ml.seq_pos, seq_cs_off: ml.seq_cs, write_pid_off: ml.write_pid,
+                    q_off: da.q, k_off: da.k, v_off: da.v, r_off: da.rel,
+                    kdyn_off: da.kdyn as i32, vdyn_off: da.vdyn as i32,
+                    kconv_t_w: l.k_conv_t, vconv_t_w: l.v_conv_t, qclip_w: l.q_clip, relclip_w: l.rel_clip,
+                    log_alpha: self.eng.log_alpha, log_floor: eff_log_floor,
+                    qp_off: da.qp, rp_off: da.rp, sink_off: da.sink, eff_sink_off: eff_sink,
+                    use_dc_mean: dc_on as u32, pad0: 0, pad1: 0, pad2: 0,
+                };
+                enc_go(self.eng, e, skip, C_KVPREP, "k_kvprep_wht_write", &kw, (1, NKV, 1), 128);
+
+                let qs = QuestScoreArgs {
+                    b: 1, slot_idx: slot_idx as u32, sum_pool_cap: self.cfg.sum_pool_pages as u32,
+                    max_pages: self.al.max_pages as u32, top_k: self.cfg.top_k_pages as u32,
+                    topk_stride: self.al.topk_stride as u32, mask_words: self.al.mask_words as u32, use_sum_pt: 1,
+                    qp_off: da.qp, sink_off: eff_sink,
+                    seq_nfar_off: ml.seq_nfar, sum_pt_off: ml.sum_pt, sum_pt_stride: ml.far_pt_stride as u32, sum_base_off: ml.sum_base,
+                    scores_off: self.al.scores_off, topk_off: self.al.topk_off, topk_cnt_off: self.al.topk_cnt_off,
+                    ret_mask_off: self.al.ret_mask_off, head_mask_off: self.al.head_mask_off, pad0: 0,
+                };
+                let score_k = if use_wht2 { "k_score_pages_wht2" } else { "k_score_pages_quest" };
+                enc_go(self.eng, e, skip, C_FFNPOST, score_k, &qs, (NKV, 1, 1), 256);
+
+                let sa = SparseWhtAttnArgs {
+                    b: 1, pool_cap: self.lru.hot_cap as u32, slot_idx: slot_idx as u32, layer_slot: slot as u32,
+                    page_toks: pt as u32, kv_bits: self.cfg.kv_bits, sum_pool_cap: self.cfg.sum_pool_pages as u32, use_sum_pt: 1,
+                    use_centroids: self.cfg.use_centroids as u32,
+                    local_pt_stride: ml.local_pt_stride as u32, far_pt_stride: ml.far_pt_stride as u32, sum_pt_stride: ml.far_pt_stride as u32,
+                    topk_stride: self.al.topk_stride as u32, mask_words: self.al.mask_words as u32,
+                    qp_off: da.qp, rp_off: da.rp, sink_off: eff_sink, gate_off: da.gate, out_off: da.agh, relbias_w: l.rel_bias,
+                    seq_pos_off: ml.seq_pos, seq_nfar_off: ml.seq_nfar,
+                    local_pt_off: ml.local_pt, far_pt_off: ml.far_pt, sum_pt_off: ml.sum_pt, sum_base_off: ml.sum_base,
+                    topk_off: self.al.topk_off, topk_cnt_off: self.al.topk_cnt_off,
+                    ret_mask_off: self.al.ret_mask_off, head_mask_off: self.al.head_mask_off,
+                    sum_format: use_wht2 as u32, pad1: 0,
+                };
+                enc_go(self.eng, e, skip, C_WOPOST, "k_attn_sparse_wht_b", &sa, (NKV, 1, 1), 128);
+            }
+
+            // 4. wo streaming Q4_K matvec (reads half agh directly) + fused FP16 CS branch-2 ring post-conv + residual
+            debug_assert_eq!(l.wo.ty, crate::gguf::T_Q4_K);
+            let block_start = ip % BLOCK == 0;
+            let mut live: Vec<usize> = blks.clone(); live.push(cur_v); live.extend_from_slice(pinned);
+            let mid = va.alloc(&live);
+            let wo = WoPostArgs {
+                w_lo: l.wo.off as u32, w_hi: (l.wo.off >> 32) as u32, row_bytes: l.wo.row_bytes, wtype: l.wo.ty,
+                nrows: l.wo.rows, k: l.wo.k, xh_off: da.agh, out_off: da.vec(mid),
+                res_off: da.vec(cur_v), has_res: (!block_start) as u32,
+                layer_slot: slot as u32, max_batch: self.cfg.max_active_batch as u32, convw_t_off: l.attn_post_conv_t,
+                b: 1, seq_cs_off: ml.seq_cs, seq_pos_off: ml.seq_pos,
+            };
+            enc_go(self.eng, e, skip, C_WO, "k_wo_mv_hcs", &wo, (l.wo.rows.div_ceil(8) as usize, 1, 1), 128);
+            if block_start { blks.push(cur_v); }
+
+            // 5. FFN input mix (+ loop control) -> normalized fp32 x_off
+            let mut st: Vec<u32> = blks.iter().map(|&v| da.vec(v)).collect(); st.push(da.vec(mid));
+            let x_off = if let Some(lw) = ctl {
+                let mut jf = self.eng.mix_job_off(&st, l.ffn_res_query as i32, 1, &[da.fin], &[], 0);
+                jf.ncopy[0][0] = da.b1_cat[3] as i32;
+                enc_mix_mv(self.eng, e, skip, C_MIXF, &[jf]);
+                enc_ctrl_dec(self.eng, e, skip, da, &[CtrlJob {
+                    u_off: da.fin, m_off: da.msg[3], d_off: lw.down[3], out_off: da.b1_ctrlg[3],
+                    gain_off: lw.gain[3], forget_off: lw.forget[3],
+                    res_out: da.b1_finc, ss_off: da.b1_ssp[3], norm_w: l.ffn_norm as i32, ctr: 11,
+                }]);
+                e.buf(&self.meta[meta_idx], 0, 7);
+                da.b1_finc
+            } else {
+                let jf = self.eng.mix_job_off(&st, l.ffn_res_query as i32, 1, &[da.fin], &[l.ffn_norm as i32], 0);
+                enc_mix_mv(self.eng, e, skip, C_MIXF, &[jf]);
+                da.fin
+            };
+
+            // 6. Router (fused top-k via eng.ctr) + streaming k_moe_gu + k_moe_down_hcs (FP16 CS branch-3)
+            if !self.eng.sep_topk {
+                e.buf(&self.eng.ctr, 0, 7);
+            }
+            let rpost = MvArgs {
+                post: (!self.eng.sep_topk) as u32, ctr: 12,
+                bias_off: l.exp_bias, sel_off: da.sel, wscale: self.eng.wscale, ..Default::default()
+            };
+            enc_mv_post(self.eng, e, skip, C_ROUTER, &[Engine::seg_pb(l.router, NEXP as u32, E as u32, x_off, da.rlog)], rpost);
+            if !self.eng.sep_topk {
+                e.buf(&self.meta[meta_idx], 0, 7);
+            } else {
+                let topk_args = MoeArgs {
+                    logits_off: da.rlog, bias_off: l.exp_bias, sel_off: da.sel, wscale: self.eng.wscale, ..Default::default()
+                };
+                enc_go(self.eng, e, skip, C_ROUTER, "k_topk", &topk_args, (1, 1, 1), 32);
+            }
+
+            let mut live: Vec<usize> = blks.clone(); live.push(mid); live.extend_from_slice(pinned);
+            let out = va.alloc(&live);
+            let ma = MoeArgs {
+                logits_off: da.rlog, bias_off: l.exp_bias, sel_off: da.sel, x_off,
+                norm_off: -1, ss_off: -1, ss_n: 0, eps: self.eng.eps,
+                gu_lo: l.gu.off as u32, gu_hi: (l.gu.off >> 32) as u32, gu_expert_bytes: l.gu.expert_bytes as u32, gu_row_bytes: l.gu.row_bytes,
+                act_off: da.b1_act, wscale: self.eng.wscale, beta: self.eng.situ_beta, lbeta: self.eng.situ_lbeta,
+                ..Default::default()
+            };
+            enc_go(self.eng, e, skip, C_GU, "k_moe_gu", &ma, (FF / 4, TOPK, 1), 128);
+
+            let dn = MoeDownHcsArgs {
+                sel_off: da.sel, act_off: da.b1_act,
+                dn_lo: l.dn.off as u32, dn_hi: (l.dn.off >> 32) as u32,
+                dn_expert_bytes: l.dn.expert_bytes as u32, dn_row_bytes: l.dn.row_bytes,
+                dn_type: l.dn.ty, out_off: da.vec(out),
+                res_off: da.vec(mid), convw_t_off: l.ffn_post_conv_t,
+                layer_slot: slot as u32, max_batch: self.cfg.max_active_batch as u32,
+                seq_cs_off: ml.seq_cs, seq_pos_off: ml.seq_pos,
+                pad0: 0, pad1: 0,
+            };
+            enc_go(self.eng, e, skip, C_DOWN, "k_moe_down_hcs", &dn, (E / 4, 1, 1), 64);
+            out
+        };
+
+        for ip in 0..LOOP_START { cur = run_layer_mv(ip, ip, cur, &mut blocks, None, &mut va, &[]); }
+        let prelude = cur;
+        let prelude_blocks = blocks.clone();
+        let mut bank = (0usize, 0usize);
+        for pass in 0..N_PASS {
+            if pass > 0 { cur = prelude; blocks = prelude_blocks.clone(); }
+            let msg = if pass > 0 { Some(bank) } else { None };
+            let pinned: Vec<usize> = { let mut p = vec![prelude]; if pass > 0 { p.push(bank.0); p.push(bank.1); } p };
+            for ip in LOOP_START..LOOP_END {
+                cur = run_layer_mv(slot_of(pass, ip), ip, cur, &mut blocks, msg, &mut va, &pinned);
+            }
+            bank = (blocks[prelude_blocks.len() + 1], cur);
+        }
+        for ip in LOOP_END..N_PHYS { cur = run_layer_mv(ip, ip, cur, &mut blocks, None, &mut va, &[]); }
+
+        // Final Output Mix + streaming Q6_K LM Head (+ two-stage argmax if requested)
+        let mut st: Vec<u32> = blocks.iter().map(|&v| da.vec(v)).collect(); st.push(da.vec(cur));
+        let jo = self.eng.mix_job_off(
+            &st, self.eng.output_res_query as i32, 1, &[da.b1_fout], &[self.eng.output_norm as i32], 0,
+        );
+        enc_mix_mv(self.eng, e, skip, C_OMIX, &[jo]);
+        enc_mv(self.eng, e, skip, C_LMHEAD, &[Engine::seg(&self.eng.output, da.b1_fout, da.b1_logits)]);
+
+        if run_argmax {
+            e.buf(&self.toks[tok_out_idx], 0, 6);
+            let nparts = 128u32;
+            let am = ArgmaxArgs {
+                logits_off: da.b1_logits,
+                n: self.eng.n_vocab as u32,
+                part_off: da.b1_amax,
+                nparts,
+                out_index: 0,
+                pad: [0; 3],
+            };
+            enc_go(self.eng, e, skip, C_ARGMAX, "k_argmax1", &am, (nparts as usize, 1, 1), 1024);
+            enc_go(self.eng, e, skip, C_ARGMAX, "k_argmax2", &am, (1, 1, 1), 32);
+        }
+    }
+
     /// Upload metadata for a batch of active 256K sessions and encode ONE complete 48-layer sparse-WHT decode step
     /// (6-class MoE + FP16 CS + Tiered SWA + DC-mean + WHT-2bit-sketch/Quest + WHT-K3V2/KV4/KV2 sparse attention + fused argmax).
     pub fn upload_and_encode_decode_step(
@@ -3740,40 +4117,49 @@ impl<'a> Kv256kPool<'a> {
     /// extract full-vocab un-softcapped logits via `k_lmhead_slice_sg4`, advance `sess.pos += 1`,
     /// and summarize any newly completed full page!
     pub fn step_single_logits(&mut self, sess: &mut Kv256kSession) -> Result<Vec<f32>, String> {
-        assert_eq!(self.da.cap, 1, "step_single_logits requires arena cap == 1");
+        let use_mv = Self::use_b1_mv();
+        assert!(use_mv || self.da.cap == 1, "step_single_logits requires arena cap == 1");
         let (cb, pinned) = self.encode_decode_step_impl(std::slice::from_mut(sess), 0, 0, 1, 0, false)?;
         cb.commit();
         cb.waitUntilCompleted();
         self.unpin_pids(&pinned);
 
-        // Extract full n_vocab logits in slices of LM_VSLICE_256K via k_lmhead_slice_sg4
         let nv = self.eng.n_vocab;
-        let w = &self.eng.output;
         let mut out = vec![0.0f32; nv];
-        let slice_off = self.da.lm_slice;
-        let mut v0 = 0usize;
-        while v0 < nv {
-            let vc = (nv - v0).min(LM_VSLICE_256K);
-            let cb2 = self.eng.gpu.cmd();
-            let e2 = Enc::new(&cb2);
-            e2.buf(&self.eng.w, 0, 0);
-            e2.buf(&self.act, 0, 2);
-            let la = LmHeadArgs {
-                w_lo: w.off as u32, w_hi: (w.off >> 32) as u32, row_bytes: w.row_bytes, wtype: w.ty,
-                n_vocab: nv as u32, k: w.k, xh_off: self.da.fh, part_off: slice_off,
-                b: 1, nvch: 0, vstart: v0 as u32, vcount: vc as u32,
-            };
-            e2.pso(&self.eng.gpu.pso("k_lmhead_slice_sg4"));
-            e2.bytes(&la, 5);
-            e2.dispatch((1, vc.div_ceil(64), 1), 128);
-            e2.end();
-            cb2.commit();
-            cb2.waitUntilCompleted();
+        if use_mv {
+            // B=1 matvec fast path already wrote full fp32 logits into da.b1_logits in one dispatch!
             unsafe {
-                let src = (self.act.contents().as_ptr() as *const f32).add(slice_off as usize);
-                std::ptr::copy_nonoverlapping(src, out.as_mut_ptr().add(v0), vc);
+                let src = (self.act.contents().as_ptr() as *const f32).add(self.da.b1_logits as usize);
+                std::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), nv);
             }
-            v0 += vc;
+        } else {
+            // Extract full n_vocab logits in slices of LM_VSLICE_256K via k_lmhead_slice_sg4
+            let w = &self.eng.output;
+            let slice_off = self.da.lm_slice;
+            let mut v0 = 0usize;
+            while v0 < nv {
+                let vc = (nv - v0).min(LM_VSLICE_256K);
+                let cb2 = self.eng.gpu.cmd();
+                let e2 = Enc::new(&cb2);
+                e2.buf(&self.eng.w, 0, 0);
+                e2.buf(&self.act, 0, 2);
+                let la = LmHeadArgs {
+                    w_lo: w.off as u32, w_hi: (w.off >> 32) as u32, row_bytes: w.row_bytes, wtype: w.ty,
+                    n_vocab: nv as u32, k: w.k, xh_off: self.da.fh, part_off: slice_off,
+                    b: 1, nvch: 0, vstart: v0 as u32, vcount: vc as u32,
+                };
+                e2.pso(&self.eng.gpu.pso("k_lmhead_slice_sg4"));
+                e2.bytes(&la, 5);
+                e2.dispatch((1, vc.div_ceil(64), 1), 128);
+                e2.end();
+                cb2.commit();
+                cb2.waitUntilCompleted();
+                unsafe {
+                    let src = (self.act.contents().as_ptr() as *const f32).add(slice_off as usize);
+                    std::ptr::copy_nonoverlapping(src, out.as_mut_ptr().add(v0), vc);
+                }
+                v0 += vc;
+            }
         }
 
         sess.pos += 1;
@@ -4449,7 +4835,7 @@ pub fn run_bench_256k(
         let radix_sum_pages = n_pages_256k + b_len * 64;
 
         let est_base = |sum_p: usize, hot_p: usize| -> usize {
-            let da = OptArena::new(b_len, eng.n_vocab, false);
+            let da = OptArena::new(b_len, eng.n_vocab, eng.output.rows as usize, false);
             let ml = SparseMetaLayout::new(b_len, n_pages_256k, page_toks);
             let al = SparseAuxLayout::new(b_len, n_pages_256k, top_k_pages);
             da.end as usize * 4
@@ -5267,5 +5653,105 @@ pub fn run_needle_1m_10m(eng: &Engine, tk: &Tokenizer, top_k_pages: usize, effor
         }
 
         drop(pool);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_disjoint(end: u32, ranges: &[(&str, u32, usize)]) {
+        for (i, &(na, oa, la)) in ranges.iter().enumerate() {
+            assert!(la > 0, "{na} has zero length");
+            assert_eq!(oa % 64, 0, "{na} offset {oa} not 64-float aligned");
+            let ea = oa as usize + la;
+            assert!(ea <= end as usize, "{na} [{oa}..{ea}) exceeds arena end {end}");
+            for &(nb, ob, lb) in &ranges[i + 1..] {
+                let eb = ob as usize + lb;
+                let disjoint = ea <= ob as usize || eb <= oa as usize;
+                assert!(
+                    disjoint,
+                    "arena overlap between {na} [{oa}..{ea}) and {nb} [{ob}..{eb})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_b1_mv_opt_arena_layout_and_structs() {
+        assert_eq!(std::mem::size_of::<MoeDownHcsArgs>(), 64);
+        assert_eq!(std::mem::size_of::<WoPostArgs>(), 64);
+        assert!(KERNELS.contains(&"k_wo_mv_hcs"));
+        assert!(KERNELS.contains(&"k_moe_down_hcs"));
+
+        for &cap in &[1usize, 4, 16, 64] {
+            for &need_chunk_y in &[false, true] {
+                let d = OptArena::new(cap, 200_000, 201_024, need_chunk_y);
+                let mut persist: Vec<(&str, u32, usize)> = vec![("vec0", d.vec0, B_NVEC * cap * E)];
+                for i in 0..4 {
+                    persist.push(("msg", d.msg[i], cap * E));
+                    persist.push(("cath", d.cath[i], cap * E));
+                    persist.push(("b1_cat", d.b1_cat[i], 2 * E));
+                    persist.push(("b1_ctrlg", d.b1_ctrlg[i], 64));
+                    persist.push(("b1_ssp", d.b1_ssp[i], 128));
+                }
+                assert_disjoint(d.end, &persist);
+
+                // B=1 Attention phase
+                let mut attn = persist.clone();
+                for i in 0..3 {
+                    attn.push(("inp", d.inp[i], cap * E));
+                    attn.push(("b1_cin", d.b1_cin[i], E));
+                }
+                attn.extend_from_slice(&[
+                    ("q", d.q, cap * NH * HD / 2),
+                    ("gate", d.gate, cap * NH * HD / 2),
+                    ("k", d.k, cap * NKV * HD),
+                    ("v", d.v, cap * NKV * HD),
+                    ("rel", d.rel, cap * NH * NREL),
+                    ("sink", d.sink, cap * NH),
+                    ("eff_sink", d.eff_sink, cap * NH),
+                    ("kdyn", d.kdyn, cap * 32),
+                    ("vdyn", d.vdyn, cap * 32),
+                    ("qp", d.qp, cap * NH * HD / 2),
+                    ("rp", d.rp, cap * NH * NREL),
+                    ("part", d.part, cap * NH * d.max_split * (HD + 2)),
+                    ("agh", d.agh, cap * NH * HD / 2),
+                ]);
+                assert_disjoint(d.end, &attn);
+
+                // B=1 FFN phase
+                let mut ffn = persist.clone();
+                ffn.extend_from_slice(&[
+                    ("fin", d.fin, cap * E),
+                    ("b1_finc", d.b1_finc, E),
+                    ("rlog", d.rlog, cap * NEXP),
+                    ("sel", d.sel, cap * 16),
+                    ("b1_act", d.b1_act, TOPK * FF),
+                ]);
+                assert_disjoint(d.end, &ffn);
+
+                // B=1 LM-head + argmax phase
+                let lm_b1 = vec![
+                    ("vec0", d.vec0, B_NVEC * cap * E),
+                    ("b1_fout", d.b1_fout, E),
+                    ("b1_logits", d.b1_logits, 201_024),
+                    ("b1_amax", d.b1_amax, 2 * 256),
+                ];
+                assert_disjoint(d.end, &lm_b1);
+
+                // Batched LM-head phase
+                let nvch = 200_000usize.div_ceil(LM_VCHUNK);
+                let mut lm_batched = vec![
+                    ("vec0", d.vec0, B_NVEC * cap * E),
+                    ("fh", d.fh, cap * E / 2),
+                    ("am_part", d.am_part, cap * nvch * 2),
+                ];
+                if cap == 1 {
+                    lm_batched.push(("lm_slice", d.lm_slice, LM_VSLICE_256K));
+                }
+                assert_disjoint(d.end, &lm_batched);
+            }
+        }
     }
 }

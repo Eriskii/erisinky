@@ -391,9 +391,19 @@ kernel void k_mv(device const uchar * W [[buffer(0)]], device const uchar * PB [
     if (S.wtype == 12) dot_q4k<MV_NR>(wp, S.K / 256, x, lane, sumf);
     else if (S.wtype == 14) dot_q6k<MV_NR>(wp, S.K / 256, x, lane, sumf);
     else dot_bf16<MV_NR>(wp, S.K, x, lane, sumf);
-    for (int rr = 0; rr < MV_NR; rr++) {
-        const float y = simd_sum(sumf[rr]);
-        if (lane == 0 && row0 + rr < S.nrows) mv_epilogue(S, row0 + rr, y, A, CS, PB);
+    if (S.epi == 2) {
+        const float y0 = simd_sum(sumf[0]);
+        const float y1 = simd_sum(sumf[1]);
+        if (lane == 0) {
+            device half * oh = (device half *) (A + S.out_off);
+            if (row0 + 1 < S.nrows) *(device half2 *) (oh + row0) = half2(half(y0), half(y1));
+            else oh[row0] = half(y0);
+        }
+    } else {
+        for (int rr = 0; rr < MV_NR; rr++) {
+            const float y = simd_sum(sumf[rr]);
+            if (lane == 0 && row0 + rr < S.nrows) mv_epilogue(S, row0 + rr, y, A, CS, PB);
+        }
     }
     }
     if (args.post == 1 && last_tg(CTR + args.ctr, ntg, sg * 32 + lane, &flag) && sg == 0)

@@ -496,6 +496,144 @@ kernel void k_moe_comb_post_hcs(device const uchar * PB [[buffer(1)]], device fl
     *(device float4 *) (A + a.out_off + (ulong) t * E + c) = o;
 }
 
+// Streaming B=1 Q4_K row dot product against fp16 activations in L1 (exact match to dot_q4k).
+template <int NR>
+inline void dot_q4k_half(device const uchar * const * w, int nb, device const half * x, ushort lane, thread float * sumf) {
+    const short ix = lane / 8, it = lane % 8, iq = it / 4, ir = it % 4;
+    float yl[16], yh[16];
+    for (int ib = ix; ib < nb; ib += 4) {
+        device const half * y4 = x + ib * 256 + 64 * iq + 8 * ir;
+        float4 sumy = 0.0f;
+        for (short i = 0; i < 8; ++i) {
+            yl[i + 0] = float(y4[i +   0]); sumy[0] += yl[i + 0];
+            yl[i + 8] = float(y4[i +  32]); sumy[1] += yl[i + 8];
+            yh[i + 0] = float(y4[i + 128]); sumy[2] += yh[i + 0];
+            yh[i + 8] = float(y4[i + 160]); sumy[3] += yh[i + 8];
+        }
+        for (short row = 0; row < NR; ++row) {
+            device const block_q4_K * b = (device const block_q4_K *) w[row] + ib;
+            device const ushort * sc = (device const ushort *) b->scales + iq;
+            device const ushort * q1 = (device const ushort *) b->qs + 16 * iq + 4 * ir;
+            device const ushort * q2 = q1 + 32;
+            ushort sc16[4];
+            thread const uchar * sc8 = (thread const uchar *) sc16;
+            sc16[0] = sc[0] & 0x3f3f;
+            sc16[1] = sc[2] & 0x3f3f;
+            sc16[2] = ((sc[4] >> 0) & 0x0f0f) | ((sc[0] & 0xc0c0) >> 2);
+            sc16[3] = ((sc[4] >> 4) & 0x0f0f) | ((sc[2] & 0xc0c0) >> 2);
+            float4 acc1 = 0.0f, acc2 = 0.0f;
+            for (short i = 0; i < 4; ++i) {
+                acc1[0] += yl[2 * i + 0] * (q1[i] & 0x000F);
+                acc1[1] += yl[2 * i + 1] * (q1[i] & 0x0F00);
+                acc1[2] += yl[2 * i + 8] * (q1[i] & 0x00F0);
+                acc1[3] += yl[2 * i + 9] * (q1[i] & 0xF000);
+                acc2[0] += yh[2 * i + 0] * (q2[i] & 0x000F);
+                acc2[1] += yh[2 * i + 1] * (q2[i] & 0x0F00);
+                acc2[2] += yh[2 * i + 8] * (q2[i] & 0x00F0);
+                acc2[3] += yh[2 * i + 9] * (q2[i] & 0xF000);
+            }
+            sumf[row] += float(b->d) * ((acc1[0] + 1.f / 256.f * acc1[1]) * sc8[0] +
+                                        (acc1[2] + 1.f / 256.f * acc1[3]) * sc8[1] * 1.f / 16.f +
+                                        (acc2[0] + 1.f / 256.f * acc2[1]) * sc8[4] +
+                                        (acc2[2] + 1.f / 256.f * acc2[3]) * sc8[5] * 1.f / 16.f) -
+                         float(b->dmin) * (sumy[0] * sc8[2] + sumy[1] * sc8[3] + sumy[2] * sc8[6] + sumy[3] * sc8[7]);
+        }
+    }
+}
+
+// Streaming B=1 Q4_K wo matvec reading half agh directly + fused FP16 CS branch-2 ring post-conv + optional residual.
+// Grid: (ceil(nrows / 8), 1, 1), TG = 128 (4 simdgroups x 2 rows/sg = 8 rows/TG).
+kernel void k_wo_mv_hcs(device const uchar * W [[buffer(0)]], device const uchar * PB [[buffer(1)]],
+                        device float * A [[buffer(2)]], device half * CS [[buffer(4)]],
+                        constant WoPostArgs & a [[buffer(5)]], device const uint * META [[buffer(7)]],
+                        uint tg [[threadgroup_position_in_grid]],
+                        ushort sg [[simdgroup_index_in_threadgroup]],
+                        ushort lane [[thread_index_in_simdgroup]]) {
+    const uint row0 = (tg * MV_NSG + sg) * MV_NR;
+    if (row0 >= a.nrows) return;
+    const ulong wbase = ulong(a.w_hi) << 32 | a.w_lo;
+    device const uchar * wp[MV_NR];
+    for (int rr = 0; rr < MV_NR; rr++) wp[rr] = W + wbase + (ulong) min(row0 + (uint) rr, a.nrows - 1u) * a.row_bytes;
+    float sumf[MV_NR] = {0.0f, 0.0f};
+    dot_q4k_half<MV_NR>(wp, (int) (a.K / 256u), (device const half *) (A + a.xh_off), lane, sumf);
+    const float y0 = simd_sum(sumf[0]);
+    const float y1 = simd_sum(sumf[1]);
+    if (lane == 0) {
+        const uint tap0 = META[a.seq_pos_off] % 3u;
+        const uint tap1 = (tap0 == 2u) ? 0u : (tap0 + 1u);
+        const uint tap2 = (tap1 == 2u) ? 0u : (tap1 + 1u);
+        device half * hb = CS + cs_branch_base(a.layer_slot, 2u, a.max_batch) + (ulong) META[a.seq_cs_off] * (3ul * E);
+        device const float * cw = (device const float *) (PB + a.convw_t_off);
+        const float ys[2] = { y0, y1 };
+        const half2 h0_2 = *(device const half2 *) (hb + (ulong) tap0 * E + row0);
+        const half2 h1_2 = *(device const half2 *) (hb + (ulong) tap1 * E + row0);
+        const half2 h2_2 = *(device const half2 *) (hb + (ulong) tap2 * E + row0);
+        *(device half2 *) (hb + (ulong) tap0 * E + row0) = half2(half(y0), half(y1));
+        const float h0[2] = { float(h0_2.x), float(h0_2.y) };
+        const float h1[2] = { float(h1_2.x), float(h1_2.y) };
+        const float h2[2] = { float(h2_2.x), float(h2_2.y) };
+        for (int rr = 0; rr < 2; rr++) {
+            const uint r = row0 + (uint) rr;
+            if (r < a.nrows) {
+                const float conv = cw[0 * E + r] * h0[rr] + cw[1 * E + r] * h1[rr] + cw[2 * E + r] * h2[rr] + cw[3 * E + r] * ys[rr];
+                float o = (ys[rr] + conv) * 0.4472135954999579f;
+                if (a.has_res) o += A[a.res_off + r];
+                A[a.out_off + r] = o;
+            }
+        }
+    }
+}
+
+// Streaming B=1 MoE down projection (all TOPK experts + weighted sum) + fused FP16 CS branch-3 ring post-conv + residual.
+// Exact clone of k_moe_down with FP16 CS_POOL ring update. Grid: (E / 4, 1, 1), TG = 64 (2 simdgroups x 2 rows/sg).
+struct MoeDownHcsArgs {
+    uint sel_off, act_off, dn_lo, dn_hi;
+    uint dn_expert_bytes, dn_row_bytes, dn_type, out_off;
+    uint res_off, convw_t_off, layer_slot, max_batch;
+    uint seq_cs_off, seq_pos_off, pad0, pad1;
+};
+
+kernel void k_moe_down_hcs(device const uchar * W [[buffer(0)]], device const uchar * PB [[buffer(1)]],
+                           device float * A [[buffer(2)]], device half * CS [[buffer(4)]],
+                           constant MoeDownHcsArgs & a [[buffer(5)]], device const uint * META [[buffer(7)]],
+                           uint tg [[threadgroup_position_in_grid]],
+                           ushort sg [[simdgroup_index_in_threadgroup]],
+                           ushort lane [[thread_index_in_simdgroup]]) {
+    const uint row0 = (tg * DN_NSG + sg) * DN_NR;
+    const ulong base = ulong(a.dn_hi) << 32 | a.dn_lo;
+    float acc[DN_NR] = {0.0f, 0.0f};
+    for (int s = 0; s < 9; s++) {
+        const int f = lane + 32 * s, k = f / 36, b = f % 36;
+        device const float4 * x4 = (device const float4 *) (A + a.act_off + k * FF + b * 32);
+        float4 xv[8];
+        for (int i = 0; i < 8; i++) xv[i] = x4[i];
+        const int e = (int) A[a.sel_off + k];
+        down_rows<DN_NR>(W + base + (ulong) e * a.dn_expert_bytes, row0, a.dn_row_bytes, a.dn_type, b, xv, A[a.sel_off + TOPK + k], acc);
+    }
+    const float y0 = simd_sum(acc[0]);
+    const float y1 = simd_sum(acc[1]);
+    if (lane == 0) {
+        const uint tap0 = META[a.seq_pos_off] % 3u;
+        const uint tap1 = (tap0 == 2u) ? 0u : (tap0 + 1u);
+        const uint tap2 = (tap1 == 2u) ? 0u : (tap1 + 1u);
+        device half * hb = CS + cs_branch_base(a.layer_slot, 3u, a.max_batch) + (ulong) META[a.seq_cs_off] * (3ul * E);
+        device const float * cw = (device const float *) (PB + a.convw_t_off);
+        const float ys[2] = { y0, y1 };
+        const half2 h0_2 = *(device const half2 *) (hb + (ulong) tap0 * E + row0);
+        const half2 h1_2 = *(device const half2 *) (hb + (ulong) tap1 * E + row0);
+        const half2 h2_2 = *(device const half2 *) (hb + (ulong) tap2 * E + row0);
+        *(device half2 *) (hb + (ulong) tap0 * E + row0) = half2(half(y0), half(y1));
+        const float h0[2] = { float(h0_2.x), float(h0_2.y) };
+        const float h1[2] = { float(h1_2.x), float(h1_2.y) };
+        const float h2[2] = { float(h2_2.x), float(h2_2.y) };
+        for (int rr = 0; rr < 2; rr++) {
+            const uint r = row0 + (uint) rr;
+            const float conv = cw[0 * E + r] * h0[rr] + cw[1 * E + r] * h1[rr] + cw[2 * E + r] * h2[rr] + cw[3 * E + r] * ys[rr];
+            A[a.out_off + r] = A[a.res_off + r] + (ys[rr] + conv) * 0.4472135954999579f;
+        }
+    }
+}
+
 // Fast GPU zero of specific sequence slots in FP16 slot-major CS_POOL. Grid: (ceil(CS_NCH / 256), n, 48), TG = 256.
 kernel void k_zero_cs_hcs(device half * POOL [[buffer(4)]], constant CopyCsArgs & a [[buffer(5)]],
                           device const uint * META [[buffer(7)]],
