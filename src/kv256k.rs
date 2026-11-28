@@ -29,6 +29,7 @@ pub const CS_SEQ_ELEMS: usize = N_SLOT * NCH * 3; // 48 * 6656 * 3 = 958,464 ele
 pub const KV_PAGE_SUM_BYTES: usize = 528;  // sizeof(KvPageSummary) in batch_opt.metal (legacy Quest)
 pub const KV_PAGE_WHT2_BYTES: usize = 416; // sizeof(KvPageWht2) in batch_opt.metal (8x16-tok WHT-2bit sketches + WHT-4bit centroids)
 pub const WHT2_NSUB: usize = 8;
+pub const CHUNK_SCORE_SUB: usize = 16;     // queries grouped per union Top-K retrieval in k_score_chunk_pages_wht2
 pub const SWA_INNER_BLKS: usize = 9;       // 9 x 32 = 257..288 newest SWA tokens (always covers d in 0..=256!)
 pub const SWA_OUTER_BLKS: usize = 24;      // 24 x 32 = 736..768 older SWA tokens in WHT-K2V2 (9 + 24 = 33 = SWA_RING_BLKS!)
 const LM_VCHUNK: usize = 16 * 64;          // 1024 vocab rows per TG in k_lmhead_argmax_sg
@@ -311,7 +312,7 @@ struct QuestScoreArgs {
     top_k: u32, topk_stride: u32, mask_words: u32, use_sum_pt: u32,
     qp_off: u32, sink_off: u32,
     seq_nfar_off: u32, sum_pt_off: u32, sum_pt_stride: u32, sum_base_off: u32,
-    scores_off: u32, topk_off: u32, topk_cnt_off: u32, ret_mask_off: u32, head_mask_off: u32, pad0: u32,
+    scores_off: u32, topk_off: u32, topk_cnt_off: u32, ret_mask_off: u32, head_mask_off: u32, pin_mask_off: u32,
 }
 
 #[repr(C)] #[derive(Clone, Copy, Default)]
@@ -327,12 +328,23 @@ struct SparseWhtAttnArgs {
 }
 
 #[repr(C)] #[derive(Clone, Copy, Default)]
+struct ChunkWhtScoreArgs {
+    t: u32, sub_size: u32, slot_idx: u32, sum_pool_cap: u32,
+    max_pages: u32, top_k: u32, topk_stride: u32, mask_words: u32,
+    use_sum_pt: u32, qp_off: u32, sink_off: u32, nfar: u32,
+    sum_pt_off: u32, sum_base: u32, pin_mask_off: u32, scores_off: u32,
+    topk_off: u32, topk_cnt_off: u32, ret_mask_off: u32, head_mask_off: u32,
+}
+
+#[repr(C)] #[derive(Clone, Copy, Default)]
 struct ChunkWhtAttnArgs {
     t: u32, p0: u32, pool_cap: u32, slot_idx: u32, layer_slot: u32,
     page_toks: u32, kv_bits: u32, sum_pool_cap: u32, use_sum_pt: u32,
     qp_off: u32, rp_off: u32, sink_off: u32, gate_off: u32, out_off: u32, relbias_w: u32,
     local_p0_page: u32, local_pt_off: u32, sum_pt_off: u32, sum_base: u32, use_centroids: u32,
-    sum_format: u32, pad0: u32, pad1: u32, pad2: u32,
+    sum_format: u32, use_topk: u32, score_sub: u32, far_pt_off: u32,
+    topk_off: u32, topk_cnt_off: u32, ret_mask_off: u32, head_mask_off: u32,
+    topk_stride: u32, mask_words: u32, pad0: u32, pad1: u32,
 }
 
 #[repr(C)] #[derive(Clone, Copy, Default)]
@@ -2101,12 +2113,13 @@ struct SparseAuxLayout {
 }
 
 impl SparseAuxLayout {
-    fn new(max_batch: usize, max_pages: usize, top_k: usize) -> Self {
+    fn new(max_batch: usize, max_pages: usize, top_k: usize, chunk_cap: usize) -> Self {
         let mut o = 0u32;
         let mut take = |n: usize| { let r = o; o += (n.div_ceil(16) * 16) as u32; r };
         let topk_stride = top_k.clamp(1, 128).div_ceil(16) * 16;
         let mask_words = max_pages.max(32).div_ceil(32);
-        let bg = max_batch * NKV;
+        let max_groups = max_batch.max(chunk_cap.div_ceil(CHUNK_SCORE_SUB));
+        let bg = max_groups * NKV;
         let scores_off = take(bg * max_pages.max(1));
         let topk_off = take(bg * topk_stride);
         let topk_cnt_off = take(bg);
@@ -2132,8 +2145,10 @@ struct SparseMetaLayout {
     far_pt: u32,
     sum_pt: u32,
     sum_base: u32,
+    pin_mask: u32,
     local_pt_stride: usize,
     far_pt_stride: usize,
+    mask_words: usize,
     total_u32: usize,
 }
 
@@ -2143,6 +2158,7 @@ impl SparseMetaLayout {
         let mut take = |n: usize| { let r = o; o += (n.div_ceil(16) * 16) as u32; r };
         let local_pt_stride = ((EXT + chunk_cap) / page_toks + 3).max(4);
         let far_pt_stride = max_pages.max(1);
+        let mask_words = max_pages.max(32).div_ceil(32);
         let seq_pos = take(max_batch);
         let seq_suf = take(max_batch);
         let seq_cs = take(max_batch);
@@ -2157,11 +2173,12 @@ impl SparseMetaLayout {
         let far_pt = take(max_batch * far_pt_stride);
         let sum_pt = take(max_batch * far_pt_stride);
         let sum_base = take(max_batch);
+        let pin_mask = take(max_batch * mask_words);
         Self {
             seq_pos, seq_suf, seq_cs, seq_nfar, write_pid,
             swa_pt, swa_inner_pt, swa_outer_pt, swa_grad_src, swa_grad_dst,
-            local_pt, far_pt, sum_pt, sum_base,
-            local_pt_stride, far_pt_stride, total_u32: o as usize,
+            local_pt, far_pt, sum_pt, sum_base, pin_mask,
+            local_pt_stride, far_pt_stride, mask_words, total_u32: o as usize,
         }
     }
 }
@@ -2180,6 +2197,8 @@ pub struct Kv256kSession {
     pub sum_pages: Vec<u32>,
     /// Radix hashes for deduplicated completed pages (shared across sessions with identical prefixes!).
     pub page_hashes: Vec<Option<u64>>,
+    /// Logical far-page indices guaranteed to enter Top-K retrieval (sharp token-level attention, never centroid-only).
+    pub pinned_pages: std::collections::BTreeSet<usize>,
     pub last_prefix_hash: u64,
     pub swapped_out: bool,
     pub next_tok: u32,
@@ -2197,11 +2216,49 @@ impl Kv256kSession {
             logical_pages: Vec::new(),
             sum_pages: Vec::new(),
             page_hashes: Vec::new(),
+            pinned_pages: std::collections::BTreeSet::new(),
             last_prefix_hash: 0,
             swapped_out: false,
             next_tok: 0,
             generated: Vec::new(),
         }
+    }
+
+    pub fn pin_page(&mut self, lp: usize) {
+        self.pinned_pages.insert(lp);
+    }
+
+    pub fn pin_pos_range(&mut self, start_pos: usize, n_toks: usize, page_toks: usize) {
+        if n_toks == 0 || page_toks == 0 {
+            return;
+        }
+        let end_pos = start_pos.saturating_add(n_toks - 1);
+        for lp in (start_pos / page_toks)..=(end_pos / page_toks) {
+            self.pinned_pages.insert(lp);
+        }
+    }
+
+    pub fn pin_pos_range_capped(
+        &mut self,
+        start_pos: usize,
+        n_toks: usize,
+        page_toks: usize,
+        max_pinned: usize,
+    ) {
+        if n_toks == 0 || page_toks == 0 || max_pinned == 0 {
+            return;
+        }
+        let end_pos = start_pos.saturating_add(n_toks - 1);
+        for lp in (start_pos / page_toks)..=(end_pos / page_toks) {
+            if self.pinned_pages.len() >= max_pinned {
+                break;
+            }
+            self.pinned_pages.insert(lp);
+        }
+    }
+
+    pub fn clear_pinned_pages(&mut self) {
+        self.pinned_pages.clear();
     }
 }
 
@@ -2293,7 +2350,7 @@ impl<'a> Kv256kPool<'a> {
 
         // 3. Metadata & Sparse AUX buffers
         let ml = SparseMetaLayout::new(cfg.max_active_batch, max_pages, cfg.page_toks, cfg.chunk_cap);
-        let al = SparseAuxLayout::new(cfg.max_active_batch, max_pages, cfg.top_k_pages);
+        let al = SparseAuxLayout::new(cfg.max_active_batch, max_pages, cfg.top_k_pages, cfg.chunk_cap);
         let meta = [
             mem.try_alloc(&eng.gpu, ml.total_u32 * 4, "kv256k_meta0")?,
             mem.try_alloc(&eng.gpu, ml.total_u32 * 4, "kv256k_meta1")?,
@@ -2817,6 +2874,7 @@ impl<'a> Kv256kPool<'a> {
         for lid in sess.logical_pages.drain(..) {
             self.lru.free_logical(lid, &mut self.cold);
         }
+        sess.pinned_pages.clear();
         sess.pos = 0;
         sess.last_prefix_hash = 0;
         sess.swapped_out = false;
@@ -3253,6 +3311,7 @@ impl<'a> Kv256kPool<'a> {
             e.buf(&self.toks[0], 0, 6);
             e.buf(&self.meta[0], 0, 7);
             e.buf(&self.kv_sum, 0, 8);
+            e.buf(&self.aux, 0, 9);
             e.buf(&self.k_dc_mean, 0, 10);
 
             let da = &self.da;
@@ -3363,7 +3422,18 @@ impl<'a> Kv256kPool<'a> {
                     local_p0_page: local_p0_page as u32,
                     local_pt_off: lpt_off, sum_pt_off: self.ml.sum_pt, sum_base: 0,
                     use_centroids: (!is_swa) as u32,
-                    sum_format: self.cfg.use_wht2_sketch as u32, pad0: 0, pad1: 0, pad2: 0,
+                    sum_format: self.cfg.use_wht2_sketch as u32,
+                    use_topk: 0,
+                    score_sub: CHUNK_SCORE_SUB as u32,
+                    far_pt_off: 0,
+                    topk_off: self.al.topk_off,
+                    topk_cnt_off: self.al.topk_cnt_off,
+                    ret_mask_off: self.al.ret_mask_off,
+                    head_mask_off: self.al.head_mask_off,
+                    topk_stride: self.al.topk_stride as u32,
+                    mask_words: self.al.mask_words as u32,
+                    pad0: 0,
+                    pad1: 0,
                 };
                 enc_go(self.eng, &e, 0, C_ATTN, "k_attn_wht_chunk", &ca, (NKV, t, 1), 128);
 
@@ -3524,6 +3594,7 @@ impl<'a> Kv256kPool<'a> {
             }
         }
 
+        let allow_chunk_topk = std::env::var("INK_KV256K_NO_CHUNK_TOPK").is_err();
         let mut off = 0usize;
         while off < toks.len() {
             let t = (toks.len() - off).min(chunk_lim);
@@ -3578,6 +3649,7 @@ impl<'a> Kv256kPool<'a> {
             }
             debug_assert!(grad_jobs.len() <= 16);
 
+            let nfar_lim = local_p0_page.min(self.ml.far_pt_stride);
             let mp = self.meta[0].contents().as_ptr() as *mut u32;
             unsafe {
                 *mp.add(self.ml.seq_cs as usize) = cs_slot;
@@ -3587,8 +3659,19 @@ impl<'a> Kv256kPool<'a> {
                 for (i, &pid) in local_pids.iter().enumerate() {
                     *mp.add(self.ml.local_pt as usize + i) = pid;
                 }
-                for lp in 0..local_p0_page {
+                for lp in 0..nfar_lim {
+                    *mp.add(self.ml.far_pt as usize + lp) =
+                        self.lru.peek_hot(sess.logical_pages[lp]).unwrap_or(u32::MAX);
                     *mp.add(self.ml.sum_pt as usize + lp) = sess.sum_pages[lp];
+                }
+                let pmask = mp.add(self.ml.pin_mask as usize);
+                for w in 0..self.ml.mask_words {
+                    *pmask.add(w) = 0;
+                }
+                for &lp in &sess.pinned_pages {
+                    if lp < nfar_lim && (lp >> 5) < self.ml.mask_words {
+                        *pmask.add(lp >> 5) |= 1u32 << (lp & 31);
+                    }
                 }
                 for (k, &pid) in sess.swa_pages.iter().take(SWA_INNER_BLKS).enumerate() {
                     *mp.add(self.ml.swa_inner_pt as usize + k) = pid;
@@ -3740,6 +3823,7 @@ impl<'a> Kv256kPool<'a> {
                     e.buf(&self.kv_comp, 0, 3);
                     e.buf(&self.kv_scales, 0, 6);
                     e.buf(&self.kv_sum, 0, 8);
+                    e.buf(&self.aux, 0, 9);
                     let kw = WhtKvPrepArgs {
                         b: t as u32, pool_cap: self.lru.hot_cap as u32, slot_idx: slot_idx as u32,
                         page_toks: pt as u32, kv_bits: self.cfg.kv_bits,
@@ -3763,6 +3847,36 @@ impl<'a> Kv256kPool<'a> {
                         };
                         enc_go(self.eng, &e, 0, C_KVPREP, "k_state_upd_hcs", &su, (NKV * HD / 256, 1, 1), 256);
                     }
+                    let use_topk = self.cfg.use_wht2_sketch
+                        && nfar_lim > 0
+                        && self.cfg.top_k_pages > 0
+                        && allow_chunk_topk;
+                    if use_topk {
+                        let n_sub = t.div_ceil(CHUNK_SCORE_SUB);
+                        let cs = ChunkWhtScoreArgs {
+                            t: t as u32,
+                            sub_size: CHUNK_SCORE_SUB as u32,
+                            slot_idx: slot_idx as u32,
+                            sum_pool_cap: self.cfg.sum_pool_pages as u32,
+                            max_pages: self.al.max_pages as u32,
+                            top_k: self.cfg.top_k_pages as u32,
+                            topk_stride: self.al.topk_stride as u32,
+                            mask_words: self.al.mask_words as u32,
+                            use_sum_pt: 1,
+                            qp_off: da.qp,
+                            sink_off: sink_for_attn,
+                            nfar: nfar_lim as u32,
+                            sum_pt_off: self.ml.sum_pt,
+                            sum_base: 0,
+                            pin_mask_off: self.ml.pin_mask,
+                            scores_off: self.al.scores_off,
+                            topk_off: self.al.topk_off,
+                            topk_cnt_off: self.al.topk_cnt_off,
+                            ret_mask_off: self.al.ret_mask_off,
+                            head_mask_off: self.al.head_mask_off,
+                        };
+                        enc_go(self.eng, &e, 0, C_FFNPOST, "k_score_chunk_pages_wht2", &cs, (NKV, n_sub, 1), 256);
+                    }
                     let ca = ChunkWhtAttnArgs {
                         t: t as u32, p0: cur_p0 as u32, pool_cap: self.lru.hot_cap as u32,
                         slot_idx: slot_idx as u32, layer_slot: slot as u32,
@@ -3770,10 +3884,21 @@ impl<'a> Kv256kPool<'a> {
                         sum_pool_cap: self.cfg.sum_pool_pages as u32, use_sum_pt: 1,
                         qp_off: da.qp, rp_off: da.rp, sink_off: sink_for_attn, gate_off: da.gate,
                         out_off: da.agh, relbias_w: l.rel_bias,
-                        local_p0_page: local_p0_page as u32,
+                        local_p0_page: nfar_lim as u32,
                         local_pt_off: self.ml.local_pt, sum_pt_off: self.ml.sum_pt, sum_base: 0,
-                        use_centroids: 1,
-                        sum_format: self.cfg.use_wht2_sketch as u32, pad0: 0, pad1: 0, pad2: 0,
+                        use_centroids: self.cfg.use_centroids as u32,
+                        sum_format: self.cfg.use_wht2_sketch as u32,
+                        use_topk: use_topk as u32,
+                        score_sub: CHUNK_SCORE_SUB as u32,
+                        far_pt_off: self.ml.far_pt,
+                        topk_off: self.al.topk_off,
+                        topk_cnt_off: self.al.topk_cnt_off,
+                        ret_mask_off: self.al.ret_mask_off,
+                        head_mask_off: self.al.head_mask_off,
+                        topk_stride: self.al.topk_stride as u32,
+                        mask_words: self.al.mask_words as u32,
+                        pad0: 0,
+                        pad1: 0,
                     };
                     enc_go(self.eng, &e, 0, C_ATTN, "k_attn_wht_chunk", &ca, (NKV, t, 1), 128);
                 }
@@ -3941,9 +4066,20 @@ impl<'a> Kv256kPool<'a> {
 
                 let fpt = mp.add(ml.far_pt as usize + b * ml.far_pt_stride);
                 let sumpt = mp.add(ml.sum_pt as usize + b * ml.far_pt_stride);
-                for lp in 0..nfar.min(ml.far_pt_stride) {
+                let nfar_lim = nfar.min(ml.far_pt_stride);
+                for lp in 0..nfar_lim {
                     *fpt.add(lp) = self.lru.peek_hot(s.logical_pages[lp]).unwrap_or(u32::MAX);
                     *sumpt.add(lp) = s.sum_pages[lp];
+                }
+
+                let pmask = mp.add(ml.pin_mask as usize + b * ml.mask_words);
+                for w in 0..ml.mask_words {
+                    *pmask.add(w) = 0;
+                }
+                for &lp in &s.pinned_pages {
+                    if lp < nfar_lim && (lp >> 5) < ml.mask_words {
+                        *pmask.add(lp >> 5) |= 1u32 << (lp & 31);
+                    }
                 }
             }
         }
@@ -4128,7 +4264,7 @@ impl<'a> Kv256kPool<'a> {
                     qp_off: da.qp, sink_off: eff_sink,
                     seq_nfar_off: ml.seq_nfar, sum_pt_off: ml.sum_pt, sum_pt_stride: ml.far_pt_stride as u32, sum_base_off: ml.sum_base,
                     scores_off: self.al.scores_off, topk_off: self.al.topk_off, topk_cnt_off: self.al.topk_cnt_off,
-                    ret_mask_off: self.al.ret_mask_off, head_mask_off: self.al.head_mask_off, pad0: 0,
+                    ret_mask_off: self.al.ret_mask_off, head_mask_off: self.al.head_mask_off, pin_mask_off: ml.pin_mask,
                 };
                 let score_k = if use_wht2 { "k_score_pages_wht2" } else { "k_score_pages_quest" };
                 // C_FFNPOST is unused in fused decode -> gives 100% isolated scorer timing across all 8 full layers!
@@ -4397,7 +4533,7 @@ impl<'a> Kv256kPool<'a> {
                     qp_off: da.qp, sink_off: eff_sink,
                     seq_nfar_off: ml.seq_nfar, sum_pt_off: ml.sum_pt, sum_pt_stride: ml.far_pt_stride as u32, sum_base_off: ml.sum_base,
                     scores_off: self.al.scores_off, topk_off: self.al.topk_off, topk_cnt_off: self.al.topk_cnt_off,
-                    ret_mask_off: self.al.ret_mask_off, head_mask_off: self.al.head_mask_off, pad0: 0,
+                    ret_mask_off: self.al.ret_mask_off, head_mask_off: self.al.head_mask_off, pin_mask_off: ml.pin_mask,
                 };
                 let score_k = if use_wht2 { "k_score_pages_wht2" } else { "k_score_pages_quest" };
                 enc_go(self.eng, e, skip, C_FFNPOST, score_k, &qs, (NKV, 1, 1), 256);
@@ -4962,7 +5098,7 @@ pub fn run_bench_256k(
         let mut mg = MemGuard::new(max_mem);
         let sum_q_buf = mg.try_alloc(&eng.gpu, n_pages_256k * Kv256kPool::summary_page_bytes_for(false), "t2_quest").unwrap();
         let sum_w_buf = mg.try_alloc(&eng.gpu, n_pages_256k * Kv256kPool::summary_page_bytes_for(true), "t2_wht2").unwrap();
-        let al = SparseAuxLayout::new(1, n_pages_256k, top_k_pages);
+        let al = SparseAuxLayout::new(1, n_pages_256k, top_k_pages, 0);
         let aux = mg.try_alloc(&eng.gpu, al.total_u32 * 4, "t2_aux").unwrap();
         let act = mg.try_alloc(&eng.gpu, 65536, "t2_act").unwrap();
         let meta = mg.try_alloc(&eng.gpu, 65536, "t2_meta").unwrap();
@@ -5045,7 +5181,7 @@ pub fn run_bench_256k(
             top_k: top_k_pages as u32, topk_stride: al.topk_stride as u32, mask_words: al.mask_words as u32, use_sum_pt: 0,
             qp_off, sink_off, seq_nfar_off: 0, sum_pt_off: 0, sum_pt_stride: 0, sum_base_off: 16,
             scores_off: al.scores_off, topk_off: al.topk_off, topk_cnt_off: al.topk_cnt_off,
-            ret_mask_off: al.ret_mask_off, head_mask_off: al.head_mask_off, pad0: 0,
+            ret_mask_off: al.ret_mask_off, head_mask_off: al.head_mask_off, pin_mask_off: u32::MAX,
         };
         let bench_scorer = |label: &str, kname: &str, buf: &Buf, mib: f64| {
             let mut times = Vec::new();
@@ -5266,7 +5402,7 @@ pub fn run_bench_256k(
         let est_base = |sum_p: usize, hot_p: usize| -> usize {
             let da = OptArena::new(b_len, eng.n_vocab, eng.output.rows as usize, false);
             let ml = SparseMetaLayout::new(b_len, n_pages_256k, page_toks, 0);
-            let al = SparseAuxLayout::new(b_len, n_pages_256k, top_k_pages);
+            let al = SparseAuxLayout::new(b_len, n_pages_256k, top_k_pages, 0);
             da.end as usize * 4
                 + b_len * cs_per_inst
                 + (ml.total_u32 * 2 + al.total_u32 + b_len.max(16) * 2) * 4
@@ -6191,6 +6327,141 @@ mod tests {
                     lm_batched.push(("lm_slice", d.lm_slice, LM_VSLICE_256K));
                 }
                 assert_disjoint(d.end, &lm_batched);
+            }
+        }
+    }
+
+    #[test]
+    fn test_kv256k_session_pinned_pages_and_meta_layout() {
+        assert_eq!(std::mem::size_of::<QuestScoreArgs>(), 80);
+
+        let mut sess = Kv256kSession::new(7);
+        assert!(sess.pinned_pages.is_empty());
+
+        sess.pin_page(3);
+        sess.pin_page(3);
+        assert_eq!(sess.pinned_pages.iter().copied().collect::<Vec<_>>(), vec![3]);
+
+        // Zero-length or zero page_toks must be a no-op
+        sess.pin_pos_range(128, 0, 64);
+        sess.pin_pos_range(128, 64, 0);
+        assert_eq!(sess.pinned_pages.len(), 1);
+
+        // Exact single-page and multi-page boundary ranges
+        sess.pin_pos_range(0, 64, 64); // [0..63] -> page 0
+        assert_eq!(sess.pinned_pages.iter().copied().collect::<Vec<_>>(), vec![0, 3]);
+
+        sess.pin_pos_range(60, 10, 64); // [60..69] -> pages 0, 1
+        assert_eq!(sess.pinned_pages.iter().copied().collect::<Vec<_>>(), vec![0, 1, 3]);
+
+        sess.clear_pinned_pages();
+        assert!(sess.pinned_pages.is_empty());
+
+        // Capped pinning must stop once pinned_pages.len() reaches max_pinned
+        sess.pin_pos_range_capped(0, 500, 64, 0);
+        assert!(sess.pinned_pages.is_empty());
+
+        sess.pin_pos_range_capped(64, 512, 64, 3); // pages 1..=8, capped at 3 -> {1, 2, 3}
+        assert_eq!(sess.pinned_pages.iter().copied().collect::<Vec<_>>(), vec![1, 2, 3]);
+
+        // Overlapping range with higher cap adds only until new cap is reached
+        sess.pin_pos_range_capped(128, 512, 64, 5); // pages 2..=9; 2 & 3 already present, adds 4 & 5
+        assert_eq!(
+            sess.pinned_pages.iter().copied().collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5]
+        );
+
+        // Further capped insert at same cap does nothing
+        sess.pin_pos_range_capped(1024, 256, 64, 5);
+        assert_eq!(sess.pinned_pages.len(), 5);
+
+        // SparseMetaLayout sizing, 16-u32 alignment, non-overlap, and mask_words parity with SparseAuxLayout
+        for &(max_batch, max_pages, page_toks, chunk_cap) in &[
+            (1usize, 10usize, 64usize, 0usize),
+            (1, 2048, 64, 256),
+            (1, 2048, 128, 256),
+            (8, 4096, 64, 256),
+        ] {
+            let ml = SparseMetaLayout::new(max_batch, max_pages, page_toks, chunk_cap);
+            let al = SparseAuxLayout::new(max_batch, max_pages, 128, chunk_cap);
+            assert_eq!(ml.mask_words, al.mask_words);
+            assert_eq!(ml.mask_words, max_pages.max(32).div_ceil(32));
+
+            let fields: [(&str, u32, usize); 15] = [
+                ("seq_pos", ml.seq_pos, max_batch),
+                ("seq_suf", ml.seq_suf, max_batch),
+                ("seq_cs", ml.seq_cs, max_batch),
+                ("seq_nfar", ml.seq_nfar, max_batch),
+                ("write_pid", ml.write_pid, max_batch.max(64)),
+                ("swa_pt", ml.swa_pt, max_batch * SWA_RING_BLKS),
+                ("swa_inner_pt", ml.swa_inner_pt, max_batch * SWA_INNER_BLKS),
+                ("swa_outer_pt", ml.swa_outer_pt, max_batch * SWA_OUTER_BLKS),
+                ("swa_grad_src", ml.swa_grad_src, max_batch.max(16)),
+                ("swa_grad_dst", ml.swa_grad_dst, max_batch.max(16)),
+                ("local_pt", ml.local_pt, max_batch * ml.local_pt_stride),
+                ("far_pt", ml.far_pt, max_batch * ml.far_pt_stride),
+                ("sum_pt", ml.sum_pt, max_batch * ml.far_pt_stride),
+                ("sum_base", ml.sum_base, max_batch),
+                ("pin_mask", ml.pin_mask, max_batch * ml.mask_words),
+            ];
+            for (i, &(na, oa, la)) in fields.iter().enumerate() {
+                assert_eq!(oa % 16, 0, "{na} offset {oa} not 16-u32 aligned");
+                let ea = oa as usize + la;
+                assert!(ea <= ml.total_u32, "{na} [{oa}..{ea}) exceeds total_u32 {}", ml.total_u32);
+                for &(nb, ob, lb) in &fields[i + 1..] {
+                    let eb = ob as usize + lb;
+                    assert!(
+                        ea <= ob as usize || eb <= oa as usize,
+                        "SparseMetaLayout overlap between {na} [{oa}..{ea}) and {nb} [{ob}..{eb})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_chunk_topk_args_and_aux_layout() {
+        assert_eq!(CHUNK_SCORE_SUB, 16);
+        assert_eq!(std::mem::size_of::<ChunkWhtScoreArgs>(), 80);
+        assert_eq!(std::mem::size_of::<ChunkWhtAttnArgs>(), 128);
+        assert!(KERNELS.contains(&"k_score_chunk_pages_wht2"));
+        assert!(KERNELS.contains(&"k_attn_wht_chunk"));
+
+        // Verify SparseAuxLayout scales to max(max_batch, ceil(chunk_cap / CHUNK_SCORE_SUB)) groups,
+        // keeps 16-u32 alignment, and has zero overlapping regions for chunk_cap = 256.
+        for &(max_batch, max_pages, top_k, chunk_cap) in &[
+            (1usize, 2048usize, 128usize, 256usize),
+            (1, 4096, 128, 256),
+            (1, 64, 64, 256),
+            (8, 2048, 128, 256),
+            (32, 2048, 64, 256),
+            (1, 2048, 128, 0),
+        ] {
+            let al = SparseAuxLayout::new(max_batch, max_pages, top_k, chunk_cap);
+            let max_groups = max_batch.max(chunk_cap.div_ceil(CHUNK_SCORE_SUB));
+            let bg = max_groups * NKV;
+            if chunk_cap == 256 && max_batch == 1 {
+                assert_eq!(max_groups, 16);
+                assert_eq!(bg, 128);
+            }
+            let fields: [(&str, u32, usize); 5] = [
+                ("scores", al.scores_off, bg * max_pages.max(1)),
+                ("topk", al.topk_off, bg * al.topk_stride),
+                ("topk_cnt", al.topk_cnt_off, bg),
+                ("ret_mask", al.ret_mask_off, bg * al.mask_words),
+                ("head_mask", al.head_mask_off, 16),
+            ];
+            for (i, &(na, oa, la)) in fields.iter().enumerate() {
+                assert_eq!(oa % 16, 0, "{na} offset {oa} not 16-u32 aligned");
+                let ea = oa as usize + la;
+                assert!(ea <= al.total_u32, "{na} [{oa}..{ea}) exceeds total_u32 {}", al.total_u32);
+                for &(nb, ob, lb) in &fields[i + 1..] {
+                    let eb = ob as usize + lb;
+                    assert!(
+                        ea <= ob as usize || eb <= oa as usize,
+                        "SparseAuxLayout overlap between {na} [{oa}..{ea}) and {nb} [{ob}..{eb})"
+                    );
+                }
             }
         }
     }

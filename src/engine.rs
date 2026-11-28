@@ -102,7 +102,7 @@ pub const KERNELS: &[&str] = &[
     "k_attn_paged_b_hcs", "k_postconv_hcs_chunk", "k_state_upd_hcs",
     "k_kvprep_wht_write", "k_fp16_to_wht_compress", "k_page_summarize_kv",
     "k_score_pages_quest", "k_attn_sparse_wht_b", "k_attn_wht_chunk",
-    "k_compute_k_dc_mean", "k_page_summarize_wht2", "k_score_pages_wht2",
+    "k_compute_k_dc_mean", "k_page_summarize_wht2", "k_score_pages_wht2", "k_score_chunk_pages_wht2",
     "k_swa_compress_outer", "k_swa_load_from_engine", "k_attn_swa_tiered_b",
     "k_swa_prep_chunk", "k_attn_swa_tiered_chunk", "k_swa_commit_chunk",
     "k_attn_master_diff_b", "k_kv_diff_extract", "k_kvcomm_apply_offset",

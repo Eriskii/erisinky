@@ -1667,7 +1667,7 @@ struct QuestScoreArgs {
     uint top_k, topk_stride, mask_words, use_sum_pt;
     uint qp_off, sink_off;
     uint seq_nfar_off, sum_pt_off, sum_pt_stride, sum_base_off;
-    uint scores_off, topk_off, topk_cnt_off, ret_mask_off, head_mask_off, pad0;
+    uint scores_off, topk_off, topk_cnt_off, ret_mask_off, head_mask_off, pin_mask_off;
 };
 
 kernel void k_score_pages_quest(device const float * A [[buffer(2)]], constant QuestScoreArgs & a [[buffer(5)]],
@@ -1741,7 +1741,12 @@ kernel void k_score_pages_quest(device const float * A [[buffer(2)]], constant Q
             const float s = simd_sum(ub.x + ub.y + ub.z + ub.w) - sink[h];
             best_s = max(best_s, s);
         }
-        if (lane == 0) sc_buf[p] = best_s;
+        if (lane == 0) {
+            const bool is_pinned = (a.pin_mask_off != 0xFFFFFFFFu)
+                && (((META[a.pin_mask_off + (ulong) b * a.mask_words + (p >> 5)] >> (p & 31u)) & 1u) != 0u);
+            const float final_s = is_pinned ? 1e20f : best_s;
+            sc_buf[p] = final_s;
+        }
     }
     threadgroup_barrier(mem_flags::mem_device);
 
@@ -1921,6 +1926,229 @@ kernel void k_score_pages_wht2(device const float * A [[buffer(2)]], constant Qu
             s += simd_shuffle_xor(s, 1);
             s += simd_shuffle_xor(s, 2);
             if (sc > 0.0f) best_s = max(best_s, s * sc - sink[h]);
+        }
+        const float page_s = simd_max(best_s);
+        if (lane == 0) {
+            const bool is_pinned = (a.pin_mask_off != 0xFFFFFFFFu)
+                && (((META[a.pin_mask_off + (ulong) b * a.mask_words + (p >> 5)] >> (p & 31u)) & 1u) != 0u);
+            const float final_s = is_pinned ? 1e20f : page_s;
+            sc_buf[p] = final_s;
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_device);
+
+    // Stage 2: Exact Top-K_ret selection via 2-pass 8-bit radix histogram + 256-entry bitonic sort
+    atomic_store_explicit(&hist[tid], 0u, memory_order_relaxed);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint p = tid; p < nfar; p += 256u) {
+        const uint bin = float_to_ord(sc_buf[p]) >> 24;
+        atomic_fetch_add_explicit(&hist[bin], 1u, memory_order_relaxed);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (tid == 0) {
+        uint acc = 0u, cb = 0u;
+        for (int bi = 255; bi >= 0; bi--) {
+            const uint c = atomic_load_explicit(&hist[bi], memory_order_relaxed);
+            if (acc + c >= K_ret) { cb = (uint) bi; break; }
+            acc += c;
+        }
+        cut_bin = cb;
+        cut_rem = K_ret - acc;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const uint cb1 = cut_bin;
+
+    atomic_store_explicit(&hist[tid], 0u, memory_order_relaxed);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint p = tid; p < nfar; p += 256u) {
+        const uint u = float_to_ord(sc_buf[p]);
+        if ((u >> 24) == cb1) atomic_fetch_add_explicit(&hist[(u >> 16) & 255u], 1u, memory_order_relaxed);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (tid == 0) {
+        uint acc = 0u, cb2 = 0u;
+        for (int bi = 255; bi >= 0; bi--) {
+            const uint c = atomic_load_explicit(&hist[bi], memory_order_relaxed);
+            if (acc + c >= cut_rem) { cb2 = (uint) bi; break; }
+            acc += c;
+        }
+        cut_bin = (cb1 << 8) | cb2;
+        ncand = 0u;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const uint thresh16 = cut_bin;
+    threadgroup atomic_uint * nc = (threadgroup atomic_uint *) &ncand;
+
+    for (uint p = tid; p < nfar; p += 256u) {
+        const float v = sc_buf[p];
+        if ((float_to_ord(v) >> 16) > thresh16) {
+            const uint pos_c = atomic_fetch_add_explicit(nc, 1u, memory_order_relaxed);
+            if (pos_c < 256u) { cv[pos_c] = v; ci[pos_c] = p; }
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint p = tid; p < nfar; p += 256u) {
+        const float v = sc_buf[p];
+        if ((float_to_ord(v) >> 16) == thresh16) {
+            const uint pos_c = atomic_fetch_add_explicit(nc, 1u, memory_order_relaxed);
+            if (pos_c < 256u) { cv[pos_c] = v; ci[pos_c] = p; }
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const uint n = min(ncand, 256u);
+    if (tid >= n) { cv[tid] = SPARSE_NEG_INF; ci[tid] = 0x7fffffffu; }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint k = 2u; k <= 256u; k <<= 1) {
+        for (uint j = k >> 1; j > 0u; j >>= 1) {
+            const uint ixj = tid ^ j;
+            if (ixj > tid) {
+                const bool asc = ((tid & k) == 0u);
+                const float va = cv[tid], vb = cv[ixj];
+                const uint ia = ci[tid], ib = ci[ixj];
+                const bool a_better = (va > vb) || (va == vb && ia < ib);
+                if (asc ? !a_better : a_better) { cv[tid] = vb; ci[tid] = ib; cv[ixj] = va; ci[ixj] = ia; }
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+    }
+
+    const uint picked = min(K_ret, n);
+    if (tid < picked) {
+        const uint p = ci[tid];
+        topk_out[tid] = p;
+        atomic_fetch_or_explicit((device atomic_uint *) (rmask + (p >> 5)), 1u << (p & 31u), memory_order_relaxed);
+    }
+    if (tid == 0) AUX[a.topk_cnt_off + bg] = picked;
+}
+
+// ---- 3C. k_score_chunk_pages_wht2:
+// Grouped WHT-2bit-sketch far-page scorer for chunked prefill (`prefill_append_chunked`).
+// Groups `sub_size` (<= CHUNK_SCORE_SUB = 16) consecutive queries into one union Top-K_ret retrieval set per
+// (KV group, sub-group), reading each page's 256 B sketch ONCE into registers and dotting across all `nt`
+// staged queries in TG memory (zero inverse WHT, honors `pin_mask_off` with score 1e20f).
+// Grid: (NKV, ceil(T / sub_size), 1), TG = 256 (8 simdgroups).
+#define CHUNK_SCORE_SUB 16u
+
+struct ChunkWhtScoreArgs {
+    uint T, sub_size, slot_idx, sum_pool_cap;
+    uint max_pages, top_k, topk_stride, mask_words;
+    uint use_sum_pt, qp_off, sink_off, nfar;
+    uint sum_pt_off, sum_base, pin_mask_off, scores_off;
+    uint topk_off, topk_cnt_off, ret_mask_off, head_mask_off;
+};
+
+kernel void k_score_chunk_pages_wht2(device const float * A [[buffer(2)]], constant ChunkWhtScoreArgs & a [[buffer(5)]],
+                                     device const uint * META [[buffer(7)]],
+                                     device const KvPageWht2 * SUM2 [[buffer(8)]],
+                                     device uint * AUX [[buffer(9)]],
+                                     uint2 tgp [[threadgroup_position_in_grid]],
+                                     ushort tid [[thread_index_in_threadgroup]],
+                                     ushort sg [[simdgroup_index_in_threadgroup]],
+                                     ushort lane [[thread_index_in_simdgroup]]) {
+    threadgroup half4 qs4[CHUNK_SCORE_SUB][3][HD / 4];
+    threadgroup float sinks[CHUNK_SCORE_SUB][3];
+    threadgroup atomic_uint hist[256];
+    threadgroup float cv[256];
+    threadgroup uint  ci[256];
+    threadgroup uint  cut_bin, cut_rem, ncand;
+
+    const uint g = tgp.x, sub = tgp.y;
+    const uint bg = sub * NKV + g;
+    const uint t0 = sub * a.sub_size;
+    const uint t1 = min(t0 + a.sub_size, a.T);
+    const uint nt = (t1 > t0) ? min(t1 - t0, CHUNK_SCORE_SUB) : 0u;
+    const uint nfar = min(a.nfar, a.max_pages);
+    const uint K_ret = min(a.top_k, 128u);
+
+    device uint * rmask = AUX + a.ret_mask_off + (ulong) bg * a.mask_words;
+    for (uint i = tid; i < a.mask_words; i += 256u) rmask[i] = 0u;
+
+    const uint hbit = a.slot_idx * NKV + g;
+    const bool is_ret = ((AUX[a.head_mask_off + (hbit >> 5)] >> (hbit & 31u)) & 1u) != 0u;
+
+    if (!is_ret || nfar == 0u || K_ret == 0u || nt == 0u) {
+        if (tid == 0) AUX[a.topk_cnt_off + bg] = 0u;
+        return;
+    }
+
+    threadgroup_barrier(mem_flags::mem_device);
+
+    device uint * topk_out = AUX + a.topk_off + (ulong) bg * a.topk_stride;
+    if (nfar <= K_ret) {
+        for (uint p = tid; p < nfar; p += 256u) {
+            topk_out[p] = p;
+            atomic_fetch_or_explicit((device atomic_uint *) (rmask + (p >> 5)), 1u << (p & 31u), memory_order_relaxed);
+        }
+        if (tid == 0) AUX[a.topk_cnt_off + bg] = nfar;
+        return;
+    }
+
+    device const half * qp_base = (device const half *) (A + a.qp_off) + (ulong) t0 * (NH * HD);
+    const uint total_q4 = nt * 3u * (HD / 4u);
+    for (uint idx = tid; idx < total_q4; idx += 256u) {
+        const uint d4 = idx & 31u;
+        const uint tmp = idx >> 5;
+        const uint h = tmp % 3u;
+        const uint qt = tmp / 3u;
+        qs4[qt][h][d4] = ((device const half4 *) (qp_base + (ulong) qt * (NH * HD) + (g * 3u + h) * HD))[d4];
+    }
+    const uint total_sinks = nt * 3u;
+    for (uint idx = tid; idx < total_sinks; idx += 256u) {
+        const uint qt = idx / 3u;
+        const uint h = idx % 3u;
+        sinks[qt][h] = A[a.sink_off + (ulong) (t0 + qt) * NH + g * 3u + h];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    device float * sc_buf = (device float *) (AUX + a.scores_off) + (ulong) bg * a.max_pages;
+    device const uint * sum_pt = META + a.sum_pt_off;
+    const uint sum_base = a.use_sum_pt ? 0u : a.sum_base;
+    const ulong slot_sum_base = (ulong) a.slot_idx * (ulong) a.sum_pool_cap;
+
+    const ushort sb = lane >> 2;  // 0..7 sub-block within page
+    const ushort pp = lane & 3u;  // 0..3 quarter of 128 dims (32 dims)
+    for (uint p = sg; p < nfar; p += 8u) {
+        const bool is_pinned = (a.pin_mask_off != 0xFFFFFFFFu)
+            && (((META[a.pin_mask_off + (p >> 5)] >> (p & 31u)) & 1u) != 0u);
+        if (is_pinned) {
+            if (lane == 0) sc_buf[p] = 1e20f;
+            continue;
+        }
+        const uint spid = a.use_sum_pt ? sum_pt[p] : (sum_base + p);
+        device const KvPageWht2 * sm = SUM2 + (slot_sum_base + (ulong) spid) * NKV + g;
+        const float sc = float(sm->sc_sk[sb]);
+        const uint2 w2 = *(device const uint2 *) (sm->k_sk[sb] + pp * 2u);
+        float best_s = SPARSE_NEG_INF;
+        if (sc > 0.0f) {
+            float4 kv[8];
+            #pragma unroll
+            for (int i = 0; i < 2; i++) {
+                const uint u = w2[i];
+                kv[i * 4 + 0] = float4(LM2_VAL[u & 3u], LM2_VAL[(u >> 2) & 3u], LM2_VAL[(u >> 4) & 3u], LM2_VAL[(u >> 6) & 3u]);
+                kv[i * 4 + 1] = float4(LM2_VAL[(u >> 8) & 3u], LM2_VAL[(u >> 10) & 3u], LM2_VAL[(u >> 12) & 3u], LM2_VAL[(u >> 14) & 3u]);
+                kv[i * 4 + 2] = float4(LM2_VAL[(u >> 16) & 3u], LM2_VAL[(u >> 18) & 3u], LM2_VAL[(u >> 20) & 3u], LM2_VAL[(u >> 22) & 3u]);
+                kv[i * 4 + 3] = float4(LM2_VAL[(u >> 24) & 3u], LM2_VAL[(u >> 26) & 3u], LM2_VAL[(u >> 28) & 3u], LM2_VAL[(u >> 30) & 3u]);
+            }
+            for (uint qt = 0u; qt < nt; qt++) {
+                float acc[3] = {0.0f, 0.0f, 0.0f};
+                for (int h = 0; h < 3; h++) {
+                    acc[h] = dot(float4(qs4[qt][h][pp * 8 + 0]), kv[0])
+                           + dot(float4(qs4[qt][h][pp * 8 + 1]), kv[1])
+                           + dot(float4(qs4[qt][h][pp * 8 + 2]), kv[2])
+                           + dot(float4(qs4[qt][h][pp * 8 + 3]), kv[3])
+                           + dot(float4(qs4[qt][h][pp * 8 + 4]), kv[4])
+                           + dot(float4(qs4[qt][h][pp * 8 + 5]), kv[5])
+                           + dot(float4(qs4[qt][h][pp * 8 + 6]), kv[6])
+                           + dot(float4(qs4[qt][h][pp * 8 + 7]), kv[7]);
+                }
+                for (int h = 0; h < 3; h++) {
+                    float s = acc[h];
+                    s += simd_shuffle_xor(s, 1);
+                    s += simd_shuffle_xor(s, 2);
+                    best_s = max(best_s, s * sc - sinks[qt][h]);
+                }
+            }
         }
         const float page_s = simd_max(best_s);
         if (lane == 0) sc_buf[p] = page_s;
@@ -2295,20 +2523,25 @@ kernel void k_attn_sparse_wht_b(device const uchar * PB [[buffer(1)]], device fl
 
 // ---- 5. k_attn_wht_chunk:
 // Causal chunked prefill attention for a single sequence over WHT-compressed pages (KV4/K3V2/KV3/KV2).
-// Supports BOTH KvPageWht2 (sum_format==1) and legacy KvPageSummary (sum_format==0) far centroids.
+// Supports:
+//   (1) Causal local window + current chunk [local_p0 .. pos] with rel_bias,
+//   (2) Optional Top-K_ret retrieved far pages from Hot RAM (when use_topk != 0, seamless centroid fallback on cold miss),
+//   (3) Non-retrieved far pages' centroids from KvPageWht2 (sum_format==1) or KvPageSummary (sum_format==0).
 // Grid: (NKV, T, 1), TG = 128.
 struct ChunkWhtAttnArgs {
     uint T, p0, pool_cap, slot_idx, layer_slot;
     uint page_toks, kv_bits, sum_pool_cap, use_sum_pt;
     uint qp_off, rp_off, sink_off, gate_off, out_off, relbias_w;
     uint local_p0_page, local_pt_off, sum_pt_off, sum_base, use_centroids;
-    uint sum_format, pad0, pad1, pad2;
+    uint sum_format, use_topk, score_sub, far_pt_off;
+    uint topk_off, topk_cnt_off, ret_mask_off, head_mask_off;
+    uint topk_stride, mask_words, pad0, pad1;
 };
 
 kernel void k_attn_wht_chunk(device const uchar * PB [[buffer(1)]], device float * A [[buffer(2)]],
                              device const uint * KV_COMP [[buffer(3)]], constant ChunkWhtAttnArgs & a [[buffer(5)]],
                              device const half * KV_SCALES [[buffer(6)]], device const uint * META [[buffer(7)]],
-                             device const uchar * SUM_RAW [[buffer(8)]],
+                             device const uchar * SUM_RAW [[buffer(8)]], device const uint * AUX [[buffer(9)]],
                              uint2 tgp [[threadgroup_position_in_grid]],
                              ushort tid [[thread_index_in_threadgroup]],
                              ushort sg [[simdgroup_index_in_threadgroup]],
@@ -2340,6 +2573,7 @@ kernel void k_attn_wht_chunk(device const uchar * PB [[buffer(1)]], device float
 
     device const float * relb = (device const float *) (PB + a.relbias_w);
     device const uint * local_pt = META + a.local_pt_off;
+    device const uint * far_pt   = META + a.far_pt_off;
     device const uint * sum_pt   = META + a.sum_pt_off;
     const ulong slot_sum_base = (ulong) a.slot_idx * (ulong) a.sum_pool_cap;
     device const KvPageSummary * SUM  = (device const KvPageSummary *) SUM_RAW;
@@ -2347,6 +2581,18 @@ kernel void k_attn_wht_chunk(device const uchar * PB [[buffer(1)]], device float
 
     const uint kb = kv_k_bits(a.kv_bits);
     const uint vb = kv_v_bits(a.kv_bits);
+    const ulong kw = kv_words_per_vec(kb);
+    const ulong vw = kv_words_per_vec(vb);
+
+    const uint sub = t / max(a.score_sub, 1u);
+    const uint bg = sub * NKV + g;
+    const uint hbit = a.slot_idx * NKV + g;
+    const bool is_ret = (a.use_topk != 0u && nfar > 0u)
+        ? (((AUX[a.head_mask_off + (hbit >> 5)] >> (hbit & 31u)) & 1u) != 0u)
+        : false;
+    const uint topk_cnt = is_ret ? AUX[a.topk_cnt_off + bg] : 0u;
+    device const uint * topk_idx = AUX + a.topk_off + (ulong) bg * a.topk_stride;
+    device const uint * ret_mask = AUX + a.ret_mask_off + (ulong) bg * a.mask_words;
 
     const ushort kk = lane / 4, pp = lane % 4;
     float m[3] = {SPARSE_NEG_INF, SPARSE_NEG_INF, SPARSE_NEG_INF};
@@ -2355,7 +2601,7 @@ kernel void k_attn_wht_chunk(device const uchar * PB [[buffer(1)]], device float
     float4 rl[3];
     for (int h = 0; h < 3; h++) rl[h] = *(threadgroup const float4 *) (&rs[h][pp * 4]);
 
-    // Causal local window + current chunk [local_p0 .. pos]
+    // ---- Pass 1: Causal local window + current chunk [local_p0 .. pos] ----
     for (uint jb = sg * 8u; jb < n_local; jb += 32u) {
         const uint j = jb + kk;
         const bool valid = j < n_local;
@@ -2404,10 +2650,58 @@ kernel void k_attn_wht_chunk(device const uchar * PB [[buffer(1)]], device float
         }
     }
 
-    // Far page centroids [0 .. nfar) (Full layers only)
-    if (a.use_centroids != 0u) for (uint lb = sg * 8u; lb < nfar; lb += 32u) {
+    // ---- Pass 2: Top-K_ret Retrieved Far Pages (token-level WHT KV4/K3V2/KV3/KV2, NO rel_bias since d >= EXT) ----
+    if (is_ret && topk_cnt > 0u) {
+        for (uint ri = 0u; ri < topk_cnt; ri++) {
+            const uint lp = topk_idx[ri];
+            const uint pid = far_pt[lp];
+            if (pid == 0xFFFFFFFFu) continue; // cold page -> Pass 3 seamlessly falls back to its centroid
+            const ulong k_page_vbase = comp_vec_idx(pid, a.pool_cap, a.slot_idx, g, 0u, 0u, a.page_toks);
+            const ulong v_page_vbase = comp_vec_idx(pid, a.pool_cap, a.slot_idx, g, 1u, 0u, a.page_toks);
+            const ulong k_page_wbase = comp_word_off(pid, a.pool_cap, a.slot_idx, g, 0u, 0u, a.page_toks, a.kv_bits);
+            const ulong v_page_wbase = comp_word_off(pid, a.pool_cap, a.slot_idx, g, 1u, 0u, a.page_toks, a.kv_bits);
+            for (uint jb = sg * 8u; jb < a.page_toks; jb += 32u) {
+                const uint boff = jb + kk;
+                const bool valid = boff < a.page_toks;
+                float acc[3] = {0.0f, 0.0f, 0.0f};
+                if (valid) {
+                    dot_wht_k32(KV_COMP, KV_SCALES, kb, k_page_wbase + (ulong) boff * kw, k_page_vbase + (ulong) boff, pp, qs4, acc);
+                }
+                float pr[3];
+                for (int h = 0; h < 3; h++) {
+                    float scv = acc[h];
+                    scv += simd_shuffle_xor(scv, 1); scv += simd_shuffle_xor(scv, 2);
+                    scv = valid ? (scv - sink[h]) : SPARSE_NEG_INF;
+                    const float blk_mx = simd_max(scv);
+                    if (blk_mx > SPARSE_NEG_THR) {
+                        const float mx = max(m[h], blk_mx);
+                        const float sc = (m[h] > SPARSE_NEG_THR) ? exp(m[h] - mx) : 0.0f;
+                        pr[h] = valid ? exp(scv - mx) : 0.0f;
+                        l[h] = l[h] * sc + simd_sum(pr[h]) * 0.25f;
+                        m[h] = mx;
+                        o[h] *= sc;
+                    } else {
+                        pr[h] = 0.0f;
+                    }
+                }
+                for (ushort q2 = 0; q2 < 8; q2++) {
+                    const uint bo = jb + q2;
+                    if (bo >= a.page_toks) break;
+                    const float4 v = load_wht_v4(KV_COMP, KV_SCALES, vb, v_page_wbase + (ulong) bo * vw, v_page_vbase + (ulong) bo, lane);
+                    for (int h = 0; h < 3; h++) o[h] += simd_shuffle(pr[h], q2 * 4) * v;
+                }
+            }
+        }
+    }
+
+    // ---- Pass 3: Non-Retrieved Far Page Centroids [0 .. nfar) (Full layers only) ----
+    if (a.use_centroids != 0u && nfar > 0u) for (uint lb = sg * 8u; lb < nfar; lb += 32u) {
         const uint lp = lb + kk;
-        const bool valid = lp < nfar;
+        bool valid = (lp < nfar);
+        if (valid && is_ret) {
+            const bool in_ret = ((ret_mask[lp >> 5] >> (lp & 31u)) & 1u) != 0u;
+            if (in_ret && far_pt[lp] != 0xFFFFFFFFu) valid = false;
+        }
         float acc[3] = {0.0f, 0.0f, 0.0f};
         float log_cnt = 0.0f, sc_vm = 0.0f;
         uint spid_l = 0u;
